@@ -33,7 +33,7 @@ from tenacity import (
 
 from .base import BaseFetcher, DataFetchError, STANDARD_COLUMNS, is_bse_code
 from .realtime_types import UnifiedRealtimeQuote, RealtimeSource
-from .us_index_mapping import get_us_index_yf_symbol, is_us_stock_code
+from .us_index_mapping import get_us_index_yf_symbol, is_us_stock_code, is_crypto_code
 
 # 可选导入本地股票映射补丁，若缺失则使用空字典兜底
 try:
@@ -103,6 +103,11 @@ class YfinanceFetcher(BaseFetcher):
             'AAPL'
         """
         code = stock_code.strip().upper()
+
+        # 加密货币：BTC-USD, ETH-USD 格式，原样返回给 yfinance
+        if is_crypto_code(code):
+            logger.debug(f"识别为加密货币: {code}")
+            return code
 
         # 美股指数：映射到 Yahoo Finance 符号（如 SPX -> ^GSPC）
         yf_symbol, _ = get_us_index_yf_symbol(code)
