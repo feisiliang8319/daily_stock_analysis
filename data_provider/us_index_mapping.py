@@ -15,7 +15,7 @@ import re
 
 # 美股代码正则：1-5 个大写字母，可选 .X 后缀（如 BRK.B）
 _US_STOCK_PATTERN = re.compile(r'^[A-Z]{1,5}(\.[A-Z])?$')
-
+_CRYPTO_PATTERN = re.compile(r'^[A-Z]{2,10}-(USD|USDT)$')
 
 # 用户输入 -> (Yahoo Finance 符号, 中文名称)
 US_INDEX_MAPPING = {
@@ -92,6 +92,10 @@ def is_us_stock_code(code: str) -> bool:
     if normalized in US_INDEX_MAPPING:
         return False
     return bool(_US_STOCK_PATTERN.match(normalized))
+    def is_crypto_code(code: str) -> bool:
+    """判断代码是否为加密货币符号（如 BTC-USD, ETH-USDT）"""
+    normalized = (code or '').strip().upper()
+    return bool(_CRYPTO_PATTERN.match(normalized))
 
 
 def get_us_index_yf_symbol(code: str) -> tuple:
