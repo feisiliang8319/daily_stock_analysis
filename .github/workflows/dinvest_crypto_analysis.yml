@@ -1,0 +1,84 @@
+name: D-INVEST 加密货币每日分析
+
+on:
+  schedule:
+    - cron: '0 12 * * *'
+
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '运行模式'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - stocks-only
+      force_run:
+        description: '强制运行'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: dinvest-crypto-analysis
+  cancel-in-progress: false
+
+env:
+  DISCLAIMER_TEXT: "⚠️ 以下分析仅供参考，不构成投资建议，不得作为交易指令。"
+  REPORT_TYPE: full
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 随机延迟
+        run: sleep $((RANDOM % 60))
+
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 安装依赖
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 创建必要目录和配置
+        run: |
+          mkdir -p data logs reports
+          echo "STOCK_LIST=${{ vars.DINVEST_CRYPTO_LIST }}" > .env
+
+      - name: 执行加密货币分析
+        env:
+          GEMINI_API_KEY: ${{ secrets.DINVEST_GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.DINVEST_GEMINI_MODEL || 'gemini-2.5-flash' }}
+          AIHUBMIX_KEY: ${{ secrets.DINVEST_AIHUBMIX_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.DINVEST_TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: "-1003892027999"
+          STOCK_LIST: ${{ vars.DINVEST_CRYPTO_LIST }}
+          REPORT_TYPE: ${{ github.event.inputs.mode || 'full' }}
+          FORCE_RUN: ${{ github.event.inputs.force_run || 'true' }}
+          NOTIFICATION_FOOTER: "⚠️ 仅供参考，不构成投资建议，不得作为交易指令 | D-INVEST-加密货币 | ${{ github.run_id }}"
+        run: |
+          echo "=== D-INVEST 加密货币分析启动 ==="
+          echo "触发时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "标的: ${STOCK_LIST}"
+          python main.py
+
+      - name: 上传分析日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dinvest-crypto-logs-${{ github.run_id }}
+          path: |
+            logs/
+            reports/
+          retention-days: 7
