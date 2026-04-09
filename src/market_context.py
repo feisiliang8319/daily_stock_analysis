@@ -34,6 +34,10 @@ def detect_market(stock_code: Optional[str]) -> str:
     if code.isdigit() and len(code) == 5:
         return "hk"
 
+    # Crypto: BTC-USD, ETH-USDT format
+    if re.match(r'^[A-Z]{2,10}-(USD|USDT)$', code):
+        return "crypto"
+
     # US stocks: 1-5 uppercase letters (AAPL, TSLA, GOOGL)
     # Also handles suffixed forms like BRK.B
     if re.match(r'^[A-Z]{1,5}(\.[A-Z]{1,2})?$', code):
@@ -57,6 +61,10 @@ _MARKET_ROLES = {
     "us": {
         "zh": "美股",
         "en": "US stock",
+    },
+    "crypto": {
+        "zh": "加密货币",
+        "en": "Cryptocurrency",
     },
 }
 
@@ -89,6 +97,17 @@ _MARKET_GUIDELINES = {
         "en": (
             "- This analysis covers a **US stock** (listed on NYSE/NASDAQ).\n"
             "- US stocks have no daily price limits (but have circuit breakers), allow T+0 and pre/after-market trading. Consider USD FX, Fed policy, and SEC regulations."
+        ),
+        "crypto": {
+           "zh": (
+            "- 本次分析对象为 **加密货币**。\n"
+            "- 加密市场 7×24 小时交易，无涨跌停限制，波动率远高于传统市场。\n"
+            "- 请关注链上数据、宏观政策（如 SEC 监管）、市场情绪等特有因素。"
+        ),
+           "en": (
+            "- This analysis targets **cryptocurrency**.\n"
+            "- Crypto markets trade 24/7 with no price limits and higher volatility.\n"
+            "- Consider on-chain metrics, regulatory developments, and market sentiment."
         ),
     },
 }
