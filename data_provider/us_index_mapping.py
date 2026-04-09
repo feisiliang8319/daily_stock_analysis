@@ -92,7 +92,7 @@ def is_us_stock_code(code: str) -> bool:
     if normalized in US_INDEX_MAPPING:
         return False
     return bool(_US_STOCK_PATTERN.match(normalized))
-    def is_crypto_code(code: str) -> bool:
+def is_crypto_code(code: str) -> bool:
     """判断代码是否为加密货币符号（如 BTC-USD, ETH-USDT）"""
     normalized = (code or '').strip().upper()
     return bool(_CRYPTO_PATTERN.match(normalized))
