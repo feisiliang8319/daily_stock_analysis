@@ -51,9 +51,10 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 创建必要目录
+      - name: 创建必要目录和配置
         run: |
           mkdir -p data logs reports
+          echo "STOCK_LIST=${{ vars.DINVEST_STOCK_LIST }}" > .env
 
       - name: 执行股票分析
         env:
