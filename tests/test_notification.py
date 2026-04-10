@@ -222,6 +222,15 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
 
     @mock.patch("src.notification.get_config")
     def test_generate_dashboard_report_localizes_english_fallback(self, mock_get_config: mock.MagicMock):
+        """Legacy English dashboard localization (DSA_MODE off).
+
+        When DSA_MODE is on (default after the prompt rewrite), the
+        dashboard report is rendered as a data-signal briefing in
+        Chinese and the legacy "Decision Dashboard / Action Levels"
+        sections are intentionally suppressed. To test the legacy
+        English localization fallback path, opt out of DSA_MODE the
+        same way an operator would to roll back the report layout.
+        """
         mock_get_config.return_value = _make_config(report_renderer_enabled=False, report_language="en")
         service = NotificationService()
         result = AnalysisResult(
@@ -251,7 +260,8 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
             },
         )
 
-        out = service.generate_dashboard_report([result], report_date="2026-03-18")
+        with mock.patch.dict("os.environ", {"DSA_MODE": "false"}):
+            out = service.generate_dashboard_report([result], report_date="2026-03-18")
 
         self.assertIn("Decision Dashboard", out)
         self.assertIn("Summary", out)

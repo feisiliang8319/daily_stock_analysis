@@ -138,6 +138,19 @@ class CCXTCryptoFetcher(BaseFetcher):
             df["date"] = pd.to_datetime(df["timestamp"], unit="ms").dt.strftime("%Y-%m-%d")
             df = df[["date", "open", "high", "low", "close", "volume"]]
 
+            # Volume normalization: ccxt.fetch_ohlcv returns BASE currency
+            # volume (e.g. BTC for BTC/USD) from a single exchange, whereas
+            # YfinanceFetcher returns USD **notional** volume aggregated across
+            # venues. Mixing both in the same ``stock_daily`` table (CCXT
+            # primary + YF fallback) breaks downstream volume_ratio_5d and
+            # volume_anomaly signals by ~6 orders of magnitude. To keep the
+            # unit stable across source switches, convert base volume to a
+            # USD-notional proxy (``volume * close``). Kraken is still a
+            # single venue, so the magnitude remains ~0.3-0.4% of the true
+            # global notional — the relative ratios within a rolling window
+            # are what the signals actually consume, and those are preserved.
+            df["volume"] = (df["volume"].astype(float) * df["close"].astype(float)).round(2)
+
             # 过滤日期范围
             if end_date:
                 df = df[df["date"] <= end_date]
@@ -146,7 +159,7 @@ class CCXTCryptoFetcher(BaseFetcher):
 
             df = df.tail(days).reset_index(drop=True)
             logger.info(
-                f"[CCXT] {pair} ({self.exchange_id}) 获取成功: {len(df)} 行"
+                f"[CCXT] {pair} ({self.exchange_id}) 获取成功: {len(df)} 行 (volume normalized to USD notional)"
             )
             return df
 
@@ -164,6 +177,15 @@ class CCXTCryptoFetcher(BaseFetcher):
         try:
             ex = self._get_exchange()
             ticker = ex.fetch_ticker(pair)
+            # Prefer quoteVolume (USD notional) when the exchange reports it
+            # so realtime volume stays consistent with the normalized daily
+            # data path. Fall back to baseVolume * last.
+            quote_volume = ticker.get("quoteVolume")
+            if quote_volume is None:
+                base_volume = ticker.get("baseVolume")
+                last_price = ticker.get("last")
+                if base_volume is not None and last_price is not None:
+                    quote_volume = float(base_volume) * float(last_price)
             return {
                 "code": code,
                 "name": code,
@@ -171,7 +193,7 @@ class CCXTCryptoFetcher(BaseFetcher):
                 "open": ticker.get("open"),
                 "high": ticker.get("high"),
                 "low": ticker.get("low"),
-                "volume": ticker.get("baseVolume"),
+                "volume": quote_volume,
                 "change_pct": ticker.get("percentage"),
                 "timestamp": ticker.get("timestamp"),
                 "source": f"ccxt:{self.exchange_id}",
