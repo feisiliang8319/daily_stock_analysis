@@ -2,7 +2,13 @@ name: D-INVEST 加密货币每日分析
 
 on:
   schedule:
-    - cron: '0 12 * * *'
+    # 6 次/天，4 小时间隔，避开美股 cron 时段（13:10/14:10/20:15/21:15 UTC）
+    - cron: '7 0 * * *'
+    - cron: '7 4 * * *'
+    - cron: '7 8 * * *'
+    - cron: '7 12 * * *'
+    - cron: '7 16 * * *'
+    - cron: '7 22 * * *'
 
   workflow_dispatch:
     inputs:
@@ -19,6 +25,9 @@ on:
         required: false
         default: false
         type: boolean
+
+permissions:
+  contents: write
 
 concurrency:
   group: dinvest-crypto-analysis
@@ -72,6 +81,39 @@ jobs:
           echo "触发时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "标的: ${STOCK_LIST}"
           python main.py
+
+      - name: 提交报告到 reports 分支（方案A：Mac Mini cron 拉取入库）
+        if: success()
+        run: |
+          set -e
+          # 1. 备份当前报告到 /tmp（切分支会清 workspace）
+          mkdir -p /tmp/dsa-reports-out
+          cp -f reports/*.md /tmp/dsa-reports-out/ 2>/dev/null || true
+          ls /tmp/dsa-reports-out/ || { echo "no reports to commit"; exit 0; }
+
+          # 2. 切到 reports 分支（如不存在则创建 orphan）
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin reports 2>/dev/null || true
+          if git show-ref --verify --quiet refs/remotes/origin/reports; then
+            git checkout -B reports origin/reports
+          else
+            git checkout --orphan reports
+            git rm -rf . 2>/dev/null || true
+          fi
+
+          # 3. 写入报告（按日期分目录避免冲突）
+          DATE_DIR="crypto/$(date -u '+%Y/%m/%d')"
+          mkdir -p "$DATE_DIR"
+          cp -f /tmp/dsa-reports-out/*.md "$DATE_DIR/" 2>/dev/null || true
+
+          git add "$DATE_DIR"
+          if git diff --cached --quiet; then
+            echo "no new content"
+            exit 0
+          fi
+          git commit -m "chore(reports): crypto $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git push origin reports
 
       - name: 上传分析日志
         if: always()

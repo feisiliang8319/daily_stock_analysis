@@ -23,6 +23,9 @@ on:
         default: false
         type: boolean
 
+permissions:
+  contents: write
+
 concurrency:
   group: dinvest-stock-analysis
   cancel-in-progress: false
@@ -84,6 +87,30 @@ jobs:
           echo "报告类型: ${REPORT_TYPE}"
           echo "目标频道: ${TELEGRAM_CHAT_ID}"
           python main.py
+
+      - name: 提交报告到 reports 分支
+        if: success()
+        run: |
+          set -e
+          mkdir -p /tmp/dsa-reports-out
+          cp -f reports/*.md /tmp/dsa-reports-out/ 2>/dev/null || true
+          ls /tmp/dsa-reports-out/ || { echo "no reports"; exit 0; }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin reports 2>/dev/null || true
+          if git show-ref --verify --quiet refs/remotes/origin/reports; then
+            git checkout -B reports origin/reports
+          else
+            git checkout --orphan reports
+            git rm -rf . 2>/dev/null || true
+          fi
+          DATE_DIR="us-stocks/$(date -u '+%Y/%m/%d')"
+          mkdir -p "$DATE_DIR"
+          cp -f /tmp/dsa-reports-out/*.md "$DATE_DIR/" 2>/dev/null || true
+          git add "$DATE_DIR"
+          if git diff --cached --quiet; then echo "no changes"; exit 0; fi
+          git commit -m "chore(reports): us-stocks $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git push origin reports
 
       - name: 上传分析日志
         if: always()
