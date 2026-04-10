@@ -20,6 +20,7 @@ from typing import Optional
 import pandas as pd
 
 from .base import BaseFetcher
+from .realtime_types import RealtimeSource, UnifiedRealtimeQuote, safe_float, safe_int
 from .us_index_mapping import is_crypto_code
 
 logger = logging.getLogger(__name__)
@@ -190,11 +191,19 @@ class CCXTCryptoFetcher(BaseFetcher):
             logger.warning(f"[CCXT] {pair} 获取失败: {type(e).__name__}: {e}")
             return pd.DataFrame()
 
-    def get_realtime_data(self, stock_code: str) -> dict:
-        """获取实时 ticker 数据"""
+    def get_realtime_quote(self, stock_code: str) -> Optional[UnifiedRealtimeQuote]:
+        """获取实时 ticker 数据.
+
+        Returns a :class:`UnifiedRealtimeQuote` so
+        ``DataFetcherManager.get_realtime_quote`` (which routes fetchers by the
+        presence of a ``get_realtime_quote`` attribute) can actually pick the
+        CCXT fetcher for crypto tickers. Prior to this the CCXT fetcher only
+        exposed ``get_realtime_data`` and was silently skipped by the manager,
+        degrading every crypto realtime call to a non-CCXT source (or nothing).
+        """
         code = (stock_code or "").strip().upper()
         if not is_crypto_code(code):
-            return {}
+            return None
 
         pair = TICKER_TO_CCXT_PAIR.get(code) or f"{code.replace('-USD', '')}/USD"
         try:
@@ -203,27 +212,37 @@ class CCXTCryptoFetcher(BaseFetcher):
             # Prefer quoteVolume (USD notional) when the exchange reports it
             # so realtime volume stays consistent with the normalized daily
             # data path. Fall back to baseVolume * last.
-            quote_volume = ticker.get("quoteVolume")
+            quote_volume = safe_float(ticker.get("quoteVolume"))
             if quote_volume is None:
-                base_volume = ticker.get("baseVolume")
-                last_price = ticker.get("last")
+                base_volume = safe_float(ticker.get("baseVolume"))
+                last_price = safe_float(ticker.get("last"))
                 if base_volume is not None and last_price is not None:
-                    quote_volume = float(base_volume) * float(last_price)
-            return {
-                "code": code,
-                "name": code,
-                "current": ticker.get("last"),
-                "open": ticker.get("open"),
-                "high": ticker.get("high"),
-                "low": ticker.get("low"),
-                "volume": quote_volume,
-                "change_pct": ticker.get("percentage"),
-                "timestamp": ticker.get("timestamp"),
-                "source": f"ccxt:{self.exchange_id}",
-            }
+                    quote_volume = base_volume * last_price
+
+            last_price = safe_float(ticker.get("last"))
+            open_price = safe_float(ticker.get("open"))
+            change_pct = safe_float(ticker.get("percentage"))
+            change_amount = None
+            if last_price is not None and open_price is not None:
+                change_amount = last_price - open_price
+
+            return UnifiedRealtimeQuote(
+                code=code,
+                name=code,
+                source=RealtimeSource.CCXT,
+                price=last_price,
+                change_pct=change_pct,
+                change_amount=change_amount,
+                volume=safe_int(quote_volume),
+                amount=quote_volume,
+                open_price=open_price,
+                high=safe_float(ticker.get("high")),
+                low=safe_float(ticker.get("low")),
+                pre_close=safe_float(ticker.get("previousClose")),
+            )
         except Exception as e:
             logger.warning(f"[CCXT] {pair} ticker 获取失败: {e}")
-            return {}
+            return None
 
     def get_stock_name(self, stock_code: str) -> Optional[str]:
         """加密货币名称（直接返回代码）"""
