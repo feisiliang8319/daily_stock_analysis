@@ -57,10 +57,27 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: 安装 ccxt
+        run: pip install ccxt
+
       - name: 创建必要目录和配置
+        env:
+          STOCK_LIST_INPUT: ${{ vars.DINVEST_STOCK_LIST }}
         run: |
           mkdir -p data logs reports
-          echo "STOCK_LIST=${{ vars.DINVEST_STOCK_LIST }}" > .env
+          {
+            echo "STOCK_LIST=${STOCK_LIST_INPUT}"
+            echo "MARKET_REVIEW_ENABLED=false"
+            echo "YFINANCE_PRIORITY=0"
+            echo "EFINANCE_PRIORITY=99"
+            echo "AKSHARE_PRIORITY=99"
+            echo "TUSHARE_PRIORITY=99"
+            echo "PYTDX_PRIORITY=99"
+            echo "BAOSTOCK_PRIORITY=99"
+            echo "LONGBRIDGE_PRIORITY=98"
+            echo "NOTIFY_MIN_SCORE=70"
+            echo "NOTIFY_SKIP_WATCH=true"
+          } > .env
 
       - name: 执行股票分析
         env:
