@@ -83,6 +83,7 @@ jobs:
             echo "CCXT_EXCHANGE=kraken"
             echo "NOTIFY_MIN_SCORE=70"
             echo "NOTIFY_SKIP_WATCH=true"
+            echo "DSA_MODE=true"
           } > .env
 
       - name: 执行加密货币分析

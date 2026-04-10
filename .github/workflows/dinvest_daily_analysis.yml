@@ -77,6 +77,7 @@ jobs:
             echo "LONGBRIDGE_PRIORITY=98"
             echo "NOTIFY_MIN_SCORE=70"
             echo "NOTIFY_SKIP_WATCH=true"
+            echo "DSA_MODE=true"
           } > .env
 
       - name: 执行股票分析

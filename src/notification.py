@@ -818,29 +818,50 @@ class NotificationService(
         sell_count = sum(1 for r in results if getattr(r, 'decision_type', '') == 'sell')
         hold_count = sum(1 for r in results if getattr(r, 'decision_type', '') in ('hold', ''))
 
-        report_lines = [
-            f"# 🎯 {report_date} {labels['dashboard_title']}",
-            "",
-            f"> {labels['analyzed_prefix']} **{len(results)}** {labels['stock_unit']} | "
-            f"🟢{labels['buy_label']}:{buy_count} 🟡{labels['watch_label']}:{hold_count} 🔴{labels['sell_label']}:{sell_count}",
-            "",
-        ]
+        # DSA 模式：数据信号简报，不输出决策性章节
+        import os as _os_dsa
+        _dsa_mode = _os_dsa.getenv("DSA_MODE", "true").lower() in ("true", "1", "yes")
+
+        if _dsa_mode:
+            report_lines = [
+                f"# 📡 {report_date} 数据信号简报",
+                "",
+                f"> 共采集 **{len(results)}** 个标的信号 | 由 DSA 上游数据源生成 | 决策由投资团队负责",
+                "",
+            ]
+        else:
+            report_lines = [
+                f"# 🎯 {report_date} {labels['dashboard_title']}",
+                "",
+                f"> {labels['analyzed_prefix']} **{len(results)}** {labels['stock_unit']} | "
+                f"🟢{labels['buy_label']}:{buy_count} 🟡{labels['watch_label']}:{hold_count} 🔴{labels['sell_label']}:{sell_count}",
+                "",
+            ]
 
         # === 新增：分析结果摘要 (Issue #112) ===
         if results:
+            heading = "📡 信号汇总" if _dsa_mode else f"📊 {labels['summary_heading']}"
             report_lines.extend([
-                f"## 📊 {labels['summary_heading']}",
+                f"## {heading}",
                 "",
             ])
             for r in sorted_results:
                 _, signal_emoji, _ = self._get_signal_level(r)
                 display_name = self._get_display_name(r, report_language)
-                report_lines.append(
-                    f"{signal_emoji} **{display_name}({r.code})**: "
-                    f"{localize_operation_advice(r.operation_advice, report_language)} | "
-                    f"{labels['score_label']} {r.sentiment_score} | "
-                    f"{localize_trend_prediction(r.trend_prediction, report_language)}"
-                )
+                if _dsa_mode:
+                    # DSA 模式：只展示标的、信号一致性、趋势标签
+                    report_lines.append(
+                        f"{signal_emoji} **{display_name}({r.code})**: "
+                        f"信号 {r.sentiment_score}/100 | "
+                        f"{localize_trend_prediction(r.trend_prediction, report_language)}"
+                    )
+                else:
+                    report_lines.append(
+                        f"{signal_emoji} **{display_name}({r.code})**: "
+                        f"{localize_operation_advice(r.operation_advice, report_language)} | "
+                        f"{labels['score_label']} {r.sentiment_score} | "
+                        f"{localize_trend_prediction(r.trend_prediction, report_language)}"
+                    )
             report_lines.extend([
                 "",
                 "---",
@@ -894,31 +915,52 @@ class NotificationService(
                         report_lines.append(f"**📢 {labels['latest_news_label']}**: {intel['latest_news']}")
                     report_lines.append("")
                 
-                # ========== 核心结论 ==========
-                core = dashboard.get('core_conclusion', {}) if dashboard else {}
-                one_sentence = core.get('one_sentence', result.analysis_summary)
-                time_sense = core.get('time_sensitivity', labels['default_time_sensitivity'])
-                pos_advice = core.get('position_advice', {})
-                
-                report_lines.extend([
-                    f"### 📌 {labels['core_conclusion_heading']}",
-                    "",
-                    f"**{signal_emoji} {signal_text}** | {localize_trend_prediction(result.trend_prediction, report_language)}",
-                    "",
-                    f"> **{labels['one_sentence_label']}**: {one_sentence}",
-                    "",
-                    f"⏰ **{labels['time_sensitivity_label']}**: {time_sense}",
-                    "",
-                ])
-                # 持仓分类建议
-                if pos_advice:
+                # ========== 核心结论 / 数据快照 ==========
+                if not _dsa_mode:
+                    core = dashboard.get('core_conclusion', {}) if dashboard else {}
+                    one_sentence = core.get('one_sentence', result.analysis_summary)
+                    time_sense = core.get('time_sensitivity', labels['default_time_sensitivity'])
+                    pos_advice = core.get('position_advice', {})
+
                     report_lines.extend([
-                        f"| {labels['position_status_label']} | {labels['action_advice_label']} |",
-                        "|---------|---------|",
-                        f"| 🆕 **{labels['no_position_label']}** | {pos_advice.get('no_position', localize_operation_advice(result.operation_advice, report_language))} |",
-                        f"| 💼 **{labels['has_position_label']}** | {pos_advice.get('has_position', labels['continue_holding'])} |",
+                        f"### 📌 {labels['core_conclusion_heading']}",
+                        "",
+                        f"**{signal_emoji} {signal_text}** | {localize_trend_prediction(result.trend_prediction, report_language)}",
+                        "",
+                        f"> **{labels['one_sentence_label']}**: {one_sentence}",
+                        "",
+                        f"⏰ **{labels['time_sensitivity_label']}**: {time_sense}",
                         "",
                     ])
+                    # 持仓分类建议
+                    if pos_advice:
+                        report_lines.extend([
+                            f"| {labels['position_status_label']} | {labels['action_advice_label']} |",
+                            "|---------|---------|",
+                            f"| 🆕 **{labels['no_position_label']}** | {pos_advice.get('no_position', localize_operation_advice(result.operation_advice, report_language))} |",
+                            f"| 💼 **{labels['has_position_label']}** | {pos_advice.get('has_position', labels['continue_holding'])} |",
+                            "",
+                        ])
+                else:
+                    # DSA 模式：只显示数据快照，无决策结论
+                    report_lines.extend([
+                        f"### 📊 数据快照",
+                        "",
+                        f"**信号一致性指数**: {result.sentiment_score}/100 | "
+                        f"**趋势标签**: {result.trend_prediction or 'N/A'}",
+                        "",
+                    ])
+                    # 异常告警（如果有 anomalies 字段）
+                    anomalies = []
+                    if dashboard and isinstance(dashboard, dict):
+                        anomalies = dashboard.get('anomalies') or []
+                    if anomalies:
+                        report_lines.extend([
+                            f"**🚨 异常告警**:",
+                        ])
+                        for a in anomalies:
+                            report_lines.append(f"- {a}")
+                        report_lines.append("")
 
                 self._append_market_snapshot(report_lines, result)
                 
@@ -979,9 +1021,9 @@ class NotificationService(
                             "",
                         ])
                 
-                # ========== 作战计划 ==========
+                # ========== 作战计划（DSA 模式跳过决策类内容）==========
                 battle = dashboard.get('battle_plan', {}) if dashboard else {}
-                if battle:
+                if battle and not _dsa_mode:
                     report_lines.extend([
                         f"### 🎯 {labels['battle_plan_heading']}",
                         "",
