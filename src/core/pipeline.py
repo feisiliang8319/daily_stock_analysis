@@ -1431,6 +1431,24 @@ class StockAnalysisPipeline:
             return
 
         stock_code = getattr(result, "code", None) or fallback_code or "unknown"
+
+        # B 方案筛选：只推送评分≥阈值 或 评级非观望的股票
+        # 通过 NOTIFY_MIN_SCORE 环境变量配置阈值（默认 70）
+        import os
+        try:
+            min_score = int(os.getenv("NOTIFY_MIN_SCORE", "70"))
+        except ValueError:
+            min_score = 70
+        skip_watch_only = os.getenv("NOTIFY_SKIP_WATCH", "true").lower() in ("true", "1", "yes")
+        score = getattr(result, "sentiment_score", 0) or 0
+        decision = (getattr(result, "decision_type", "") or "").lower()
+        trend = getattr(result, "trend_prediction", "") or ""
+        is_watch = "观望" in trend or decision in ("hold", "watch", "neutral")
+        if score < min_score and (skip_watch_only and is_watch):
+            logger.info(
+                f"[{stock_code}] 筛选跳过：评分 {score} < {min_score} 且评级观望（B方案过滤）"
+            )
+            return
         notify_lock = getattr(self, "_single_stock_notify_lock", None)
         if notify_lock is None:
             with _SINGLE_STOCK_NOTIFY_LOCK_INIT_GUARD:
@@ -1479,13 +1497,40 @@ class StockAnalysisPipeline:
     ) -> None:
         """
         发送分析结果通知
-        
+
         生成决策仪表盘格式的报告
-        
+
         Args:
             results: 分析结果列表
             skip_push: 是否跳过推送（仅保存到本地，用于单股推送模式）
         """
+        # B 方案筛选：汇总报告只包含评分≥阈值或非观望的股票
+        import os
+        try:
+            min_score = int(os.getenv("NOTIFY_MIN_SCORE", "70"))
+        except ValueError:
+            min_score = 70
+        skip_watch = os.getenv("NOTIFY_SKIP_WATCH", "true").lower() in ("true", "1", "yes")
+
+        def _keep(r):
+            score = getattr(r, "sentiment_score", 0) or 0
+            decision = (getattr(r, "decision_type", "") or "").lower()
+            trend = getattr(r, "trend_prediction", "") or ""
+            is_watch = "观望" in trend or decision in ("hold", "watch", "neutral")
+            return score >= min_score or (not skip_watch) or (not is_watch)
+
+        filtered = [r for r in results if _keep(r)]
+        filtered_out = len(results) - len(filtered)
+        if filtered_out > 0:
+            logger.info(
+                f"B方案筛选：{len(results)} 只 → {len(filtered)} 只（跳过 {filtered_out} 只评分<{min_score}的观望股票）"
+            )
+        # 无任何股票通过筛选时仍保留原列表，避免推送空报告（让 Sol 知道系统跑了）
+        if not filtered:
+            logger.info("B方案筛选后列表为空，保留原始结果避免推送空报告")
+            filtered = results
+        results = filtered
+
         try:
             logger.info("生成决策仪表盘日报...")
             report = self._generate_aggregate_report(results, report_type)

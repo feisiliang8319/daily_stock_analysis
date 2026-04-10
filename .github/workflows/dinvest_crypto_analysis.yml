@@ -60,10 +60,30 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: 安装 ccxt（CCXT crypto fetcher 依赖）
+        run: |
+          pip install ccxt
+
       - name: 创建必要目录和配置
+        env:
+          CRYPTO_STOCK_LIST: ${{ vars.DINVEST_CRYPTO_LIST }}
         run: |
           mkdir -p data logs reports
-          echo "STOCK_LIST=${{ vars.DINVEST_CRYPTO_LIST }}" > .env
+          {
+            echo "STOCK_LIST=${CRYPTO_STOCK_LIST}"
+            echo "MARKET_REVIEW_ENABLED=false"
+            echo "YFINANCE_PRIORITY=0"
+            echo "CCXT_PRIORITY=0"
+            echo "EFINANCE_PRIORITY=99"
+            echo "AKSHARE_PRIORITY=99"
+            echo "TUSHARE_PRIORITY=99"
+            echo "PYTDX_PRIORITY=99"
+            echo "BAOSTOCK_PRIORITY=99"
+            echo "LONGBRIDGE_PRIORITY=98"
+            echo "CCXT_EXCHANGE=kraken"
+            echo "NOTIFY_MIN_SCORE=70"
+            echo "NOTIFY_SKIP_WATCH=true"
+          } > .env
 
       - name: 执行加密货币分析
         env:
@@ -91,18 +111,17 @@ jobs:
           cp -f reports/*.md /tmp/dsa-reports-out/ 2>/dev/null || true
           ls /tmp/dsa-reports-out/ || { echo "no reports to commit"; exit 0; }
 
-          # 2. 切到 reports 分支（如不存在则创建 orphan）
+          # 2. 清理 workspace 中 git untracked 文件（.env / data / logs / reports），避免 checkout 冲突
+          git clean -fdx
+          git checkout .
+
+          # 3. 切到 reports 分支
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin reports 2>/dev/null || true
-          if git show-ref --verify --quiet refs/remotes/origin/reports; then
-            git checkout -B reports origin/reports
-          else
-            git checkout --orphan reports
-            git rm -rf . 2>/dev/null || true
-          fi
+          git fetch origin reports
+          git checkout -B reports origin/reports
 
-          # 3. 写入报告（按日期分目录避免冲突）
+          # 4. 写入报告（按日期分目录避免冲突）
           DATE_DIR="crypto/$(date -u '+%Y/%m/%d')"
           mkdir -p "$DATE_DIR"
           cp -f /tmp/dsa-reports-out/*.md "$DATE_DIR/" 2>/dev/null || true

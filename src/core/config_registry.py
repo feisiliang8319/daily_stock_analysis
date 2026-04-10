@@ -1430,7 +1430,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "is_sensitive": False,
         "is_required": False,
         "is_editable": True,
-        "default_value": "cn",
+        "default_value": "us",
         "options": ["cn", "us", "both"],
         "validation": {"enum": ["cn", "us", "both"]},
         "display_order": 47,

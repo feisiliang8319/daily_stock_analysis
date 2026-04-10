@@ -95,15 +95,12 @@ jobs:
           mkdir -p /tmp/dsa-reports-out
           cp -f reports/*.md /tmp/dsa-reports-out/ 2>/dev/null || true
           ls /tmp/dsa-reports-out/ || { echo "no reports"; exit 0; }
+          git clean -fdx
+          git checkout .
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin reports 2>/dev/null || true
-          if git show-ref --verify --quiet refs/remotes/origin/reports; then
-            git checkout -B reports origin/reports
-          else
-            git checkout --orphan reports
-            git rm -rf . 2>/dev/null || true
-          fi
+          git fetch origin reports
+          git checkout -B reports origin/reports
           DATE_DIR="us-stocks/$(date -u '+%Y/%m/%d')"
           mkdir -p "$DATE_DIR"
           cp -f /tmp/dsa-reports-out/*.md "$DATE_DIR/" 2>/dev/null || true

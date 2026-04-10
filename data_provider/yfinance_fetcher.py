@@ -104,7 +104,7 @@ class YfinanceFetcher(BaseFetcher):
         """
         code = stock_code.strip().upper()
 
-        # 加密货币：BTC-USD, ETH-USD 格式，原样返回给 yfinance
+        # 加密货币：BTC-USD, ETH-USD 等，yfinance 原生支持
         if is_crypto_code(code):
             logger.debug(f"识别为加密货币: {code}")
             return code

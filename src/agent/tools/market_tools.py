@@ -47,9 +47,9 @@ get_market_indices_tool = ToolDefinition(
         ToolParameter(
             name="region",
             type="string",
-            description="Market region: 'cn' for China A-shares, 'us' for US stocks (default: 'cn')",
+            description="Market region: 'us' for US stocks, 'cn' for China A-shares (default: 'us')",
             required=False,
-            default="cn",
+            default="us",
             enum=["cn", "us"],
         ),
     ],
