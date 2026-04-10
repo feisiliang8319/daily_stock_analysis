@@ -594,5 +594,92 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
         self.assertAlmostEqual(mock_post.call_count, 4, delta=1)
 
 
+class TestCoerceStrList(unittest.TestCase):
+    """
+    Regression guard for the "single-character bullet" rendering bug.
+
+    The DSA prompt asks the LLM to return ``events.risk_alerts`` /
+    ``events.positive_catalysts`` as JSON arrays, but LLMs occasionally
+    return a single raw string such as ``"数据缺失，无法判断"`` or
+    ``None``. Without defensive coercion, ``for x in value`` would split
+    the string into individual characters and each character would be
+    rendered as its own bullet (``- 数 / - 据 / - 缺 / - 失``).
+    A real production run on 2026-04-10 14:26 UTC emitted exactly this
+    garbage before the fix.
+    """
+
+    def setUp(self) -> None:
+        from src.notification import _coerce_str_list
+        self._fn = _coerce_str_list
+
+    def test_none_returns_empty_list(self) -> None:
+        self.assertEqual(self._fn(None), [])
+
+    def test_empty_string_returns_empty_list(self) -> None:
+        self.assertEqual(self._fn(""), [])
+        self.assertEqual(self._fn("   "), [])
+
+    def test_empty_list_returns_empty_list(self) -> None:
+        self.assertEqual(self._fn([]), [])
+
+    def test_proper_list_of_strings_passes_through(self) -> None:
+        self.assertEqual(
+            self._fn(["RSI 超买", "乖离率过高"]),
+            ["RSI 超买", "乖离率过高"],
+        )
+
+    def test_scalar_string_wraps_as_single_element_not_per_char(self) -> None:
+        """The critical regression: ``"数据缺失，无法判断"`` must stay a single bullet."""
+        result = self._fn("数据缺失，无法判断")
+        self.assertEqual(result, ["数据缺失，无法判断"])
+        self.assertEqual(len(result), 1)
+        # And must NOT be split into ['数', '据', '缺', '失', ...]
+        self.assertNotIn("数", result)
+        self.assertNotIn("据", result)
+
+    def test_list_drops_none_and_blank_items(self) -> None:
+        self.assertEqual(
+            self._fn(["ok", None, "  ", "still ok", ""]),
+            ["ok", "still ok"],
+        )
+
+    def test_list_stringifies_non_string_items(self) -> None:
+        """LLM sometimes emits dicts or numbers mixed into the array."""
+        self.assertEqual(
+            self._fn([{"note": "x"}, 42, "plain"]),
+            [str({"note": "x"}), "42", "plain"],
+        )
+
+    def test_max_items_caps_list_length(self) -> None:
+        self.assertEqual(
+            self._fn(["a", "b", "c", "d"], max_items=2),
+            ["a", "b"],
+        )
+
+    def test_max_items_applies_after_filtering(self) -> None:
+        """Cap counts **valid** items, not raw input length."""
+        self.assertEqual(
+            self._fn([None, "  ", "a", "b", "c"], max_items=2),
+            ["a", "b"],
+        )
+
+    def test_tuple_input_treated_as_list(self) -> None:
+        self.assertEqual(self._fn(("x", "y")), ["x", "y"])
+
+    def test_dict_scalar_coerced_to_single_repr_string(self) -> None:
+        """LLM may emit a dict as a root-level value instead of a list."""
+        value = {"risk": "RSI overbought", "severity": "high"}
+        result = self._fn(value)
+        self.assertEqual(len(result), 1)
+        self.assertIn("risk", result[0])
+
+    def test_int_scalar_coerced_to_single_string(self) -> None:
+        self.assertEqual(self._fn(42), ["42"])
+
+    def test_int_zero_coerced_to_single_string(self) -> None:
+        """Even ``0`` should render as ``"0"`` rather than being treated as empty."""
+        self.assertEqual(self._fn(0), ["0"])
+
+
 if __name__ == "__main__":
     unittest.main()

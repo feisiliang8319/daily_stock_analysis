@@ -51,6 +51,46 @@ from src.notification_sender import (
 logger = logging.getLogger(__name__)
 
 
+def _coerce_str_list(value: Any, max_items: Optional[int] = None) -> List[str]:
+    """
+    Defensively coerce an LLM-returned field into ``List[str]``.
+
+    Background: the DSA prompt schema documents ``events.risk_alerts``,
+    ``events.positive_catalysts`` (and similar intelligence arrays) as
+    JSON arrays of strings, but LLMs occasionally return a single raw
+    string (e.g. ``"数据缺失，无法判断"``) or ``None`` instead of a list.
+    Iterating that raw string in ``for x in value:`` would split it into
+    individual characters and render each character as its own bullet,
+    producing garbage like ``- 数 / - 据 / - 缺 / - 失``. This helper
+    absorbs that LLM shape noise at the render boundary.
+
+    Rules:
+    - ``None`` / empty string / empty list → ``[]``
+    - list / tuple → stringified, dropping ``None`` and all-whitespace items
+    - non-empty string → ``[value]`` (single-element list, NOT split per char)
+    - any other scalar (dict, int, ...) → ``[str(value)]`` if truthy, else ``[]``
+    - ``max_items`` optionally caps the returned length (preserves order)
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, (list, tuple)):
+        coerced: List[str] = []
+        for item in value:
+            if item is None:
+                continue
+            text = str(item)
+            if text.strip():
+                coerced.append(text)
+        if max_items is not None:
+            coerced = coerced[:max_items]
+        return coerced
+    # Fallback for dict / int / other scalars
+    text = str(value)
+    return [text] if text.strip() else []
+
+
 class NotificationChannel(Enum):
     """通知渠道类型"""
     WECHAT = "wechat"      # 企业微信
@@ -896,23 +936,33 @@ class NotificationService(
                     if intel.get('earnings_outlook'):
                         report_lines.append(f"**📊 {labels['earnings_outlook_label']}**: {intel['earnings_outlook']}")
                     # 风险警报（醒目显示）
-                    risk_alerts = intel.get('risk_alerts', [])
+                    risk_alerts = _coerce_str_list(intel.get('risk_alerts'))
                     if risk_alerts:
                         report_lines.append("")
                         report_lines.append(f"**🚨 {labels['risk_alerts_label']}**:")
                         for alert in risk_alerts:
                             report_lines.append(f"- {alert}")
                     # 利好催化
-                    catalysts = intel.get('positive_catalysts', [])
+                    catalysts = _coerce_str_list(intel.get('positive_catalysts'))
                     if catalysts:
                         report_lines.append("")
                         report_lines.append(f"**✨ {labels['positive_catalysts_label']}**:")
                         for cat in catalysts:
                             report_lines.append(f"- {cat}")
                     # 最新消息
-                    if intel.get('latest_news'):
-                        report_lines.append("")
-                        report_lines.append(f"**📢 {labels['latest_news_label']}**: {intel['latest_news']}")
+                    latest_news_raw = intel.get('latest_news')
+                    if latest_news_raw:
+                        # latest_news 场景下既可能是单个字符串也可能是 list；
+                        # list 时用 " / " 合并成单行，避免 f-string 渲染出 Python repr。
+                        if isinstance(latest_news_raw, (list, tuple)):
+                            latest_news_str = " / ".join(_coerce_str_list(latest_news_raw))
+                        else:
+                            latest_news_str = str(latest_news_raw)
+                        if latest_news_str:
+                            report_lines.append("")
+                            report_lines.append(
+                                f"**📢 {labels['latest_news_label']}**: {latest_news_str}"
+                            )
                     report_lines.append("")
                 
                 # ========== 核心结论 / 数据快照 ==========
@@ -1202,21 +1252,21 @@ class NotificationService(
                     lines.append("")
                 
                 # 风险警报（最重要，醒目显示）
-                risks = intel.get('risk_alerts', []) if intel else []
+                risks = _coerce_str_list(intel.get('risk_alerts') if intel else None, max_items=2)
                 if risks:
                     lines.append(f"🚨 **{labels['risk_alerts_label']}**:")
-                    for risk in risks[:2]:  # 最多显示2条
-                        risk_str = str(risk)
+                    for risk_str in risks:
                         risk_text = risk_str[:50] + "..." if len(risk_str) > 50 else risk_str
                         lines.append(f"   • {risk_text}")
                     lines.append("")
-                
+
                 # 利好催化
-                catalysts = intel.get('positive_catalysts', []) if intel else []
+                catalysts = _coerce_str_list(
+                    intel.get('positive_catalysts') if intel else None, max_items=2
+                )
                 if catalysts:
                     lines.append(f"✨ **{labels['positive_catalysts_label']}**:")
-                    for cat in catalysts[:2]:  # 最多显示2条
-                        cat_str = str(cat)
+                    for cat_str in catalysts:
                         cat_text = cat_str[:50] + "..." if len(cat_str) > 50 else cat_str
                         lines.append(f"   • {cat_text}")
                     lines.append("")
@@ -1468,7 +1518,7 @@ class NotificationService(
                 lines.append(f"💭 **{labels['sentiment_summary_label']}**: {str(intel['sentiment_summary'])[:80]}")
             
             # 风险警报
-            risks = intel.get('risk_alerts', [])
+            risks = _coerce_str_list(intel.get('risk_alerts'), max_items=3)
             if risks:
                 if not info_added:
                     lines.append(f"### 📰 {labels['info_heading']}")
@@ -1476,16 +1526,16 @@ class NotificationService(
                     info_added = True
                 lines.append("")
                 lines.append(f"🚨 **{labels['risk_alerts_label']}**:")
-                for risk in risks[:3]:
-                    lines.append(f"- {str(risk)[:60]}")
-            
+                for risk in risks:
+                    lines.append(f"- {risk[:60]}")
+
             # 利好催化
-            catalysts = intel.get('positive_catalysts', [])
+            catalysts = _coerce_str_list(intel.get('positive_catalysts'), max_items=3)
             if catalysts:
                 lines.append("")
                 lines.append(f"✨ **{labels['positive_catalysts_label']}**:")
-                for cat in catalysts[:3]:
-                    lines.append(f"- {str(cat)[:60]}")
+                for cat in catalysts:
+                    lines.append(f"- {cat[:60]}")
         
         if info_added:
             lines.append("")
