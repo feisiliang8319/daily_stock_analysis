@@ -212,5 +212,178 @@ class TestStorage(unittest.TestCase):
             temp_dir.cleanup()
             DatabaseManager.reset_instance()
 
+
+class TestSourceConsistentTail(unittest.TestCase):
+    """
+    Guard against cross-source volume_ratio contamination.
+
+    ``CCXTCryptoFetcher`` returns single-exchange (e.g. Kraken) base-currency
+    volume — even after the fetcher's own T-1 close normalization this stays
+    at the exchange's market share (~0.37% for BTC). ``YfinanceFetcher``
+    returns globally aggregated USD notional (~270× larger for the same day).
+    If both sources have written rows for the same crypto code and
+    ``_analyze_volume`` rolls a window across the boundary, ``volume_ratio_5d``
+    jumps ~270×, producing a fake "volume spike" / "volume shrink" signal.
+
+    ``DatabaseManager.get_source_consistent_tail`` defends against this by
+    returning only the longest end-of-window slice whose rows share the most
+    recent row's ``data_source``.
+    """
+
+    def _build_db(self) -> DatabaseManager:
+        DatabaseManager.reset_instance()
+        return DatabaseManager(db_url="sqlite:///:memory:")
+
+    def _save(self, db: DatabaseManager, code: str, d: date, volume: float, source: str) -> None:
+        db.save_daily_data(
+            pd.DataFrame(
+                [
+                    {
+                        'date': d,
+                        'open': 100.0,
+                        'high': 101.0,
+                        'low': 99.0,
+                        'close': 100.0,
+                        'volume': volume,
+                        'amount': 100.0 * volume,
+                        'pct_chg': 0.0,
+                        'ma5': 100.0,
+                        'ma10': 100.0,
+                        'ma20': 100.0,
+                        'volume_ratio': 1.0,
+                    }
+                ]
+            ),
+            code=code,
+            data_source=source,
+        )
+
+    def test_returns_empty_when_no_rows(self) -> None:
+        db = self._build_db()
+        try:
+            result = db.get_source_consistent_tail(
+                'BTC-USD', date(2026, 4, 1), date(2026, 4, 10)
+            )
+            self.assertEqual(result, [])
+        finally:
+            DatabaseManager.reset_instance()
+
+    def test_returns_full_window_when_all_rows_same_source(self) -> None:
+        db = self._build_db()
+        try:
+            for i in range(6):
+                self._save(
+                    db, 'BTC-USD', date(2026, 4, 1 + i),
+                    volume=1000.0 * (i + 1),
+                    source='CCXTCryptoFetcher',
+                )
+            result = db.get_source_consistent_tail(
+                'BTC-USD', date(2026, 4, 1), date(2026, 4, 10)
+            )
+            self.assertEqual(len(result), 6)
+            self.assertTrue(all(bar.data_source == 'CCXTCryptoFetcher' for bar in result))
+        finally:
+            DatabaseManager.reset_instance()
+
+    def test_trims_leading_rows_when_source_switches_at_tail(self) -> None:
+        """Prev source (Yfinance) must be dropped once newer source (CCXT) takes over."""
+        db = self._build_db()
+        try:
+            # Days 1-3: YfinanceFetcher (global aggregate, ~270x bigger)
+            for i in range(3):
+                self._save(
+                    db, 'BTC-USD', date(2026, 4, 1 + i),
+                    volume=2.7e10,  # global USD notional
+                    source='YfinanceFetcher',
+                )
+            # Days 4-6: CCXTCryptoFetcher (Kraken single-exchange, ~270x smaller)
+            for i in range(3):
+                self._save(
+                    db, 'BTC-USD', date(2026, 4, 4 + i),
+                    volume=1.0e8,  # Kraken USD notional
+                    source='CCXTCryptoFetcher',
+                )
+
+            result = db.get_source_consistent_tail(
+                'BTC-USD', date(2026, 4, 1), date(2026, 4, 10)
+            )
+
+            # Only the trailing CCXT tail should be returned (days 4-6)
+            self.assertEqual(len(result), 3)
+            self.assertEqual(result[0].date, date(2026, 4, 4))
+            self.assertEqual(result[-1].date, date(2026, 4, 6))
+            self.assertTrue(all(bar.data_source == 'CCXTCryptoFetcher' for bar in result))
+        finally:
+            DatabaseManager.reset_instance()
+
+    def test_cross_source_volume_ratio_does_not_explode(self) -> None:
+        """
+        Regression guard: the whole point of the helper.
+
+        With raw get_data_range, a 6-day window split 3 YF + 3 CCXT would
+        compute volume_ratio_5d = today (1e8) / mean(prev5 including YF rows
+        at 2.7e10) ~ 0.000015, triggering a false "extreme shrink" signal.
+        With get_source_consistent_tail, only the CCXT tail is visible, so
+        the rolling ratio computed downstream stays ~1.0.
+        """
+        db = self._build_db()
+        try:
+            # Mixed source window: 5 YF days then 1 CCXT day
+            for i in range(5):
+                self._save(
+                    db, 'BTC-USD', date(2026, 4, 1 + i),
+                    volume=2.7e10,
+                    source='YfinanceFetcher',
+                )
+            self._save(
+                db, 'BTC-USD', date(2026, 4, 6),
+                volume=1.0e8,
+                source='CCXTCryptoFetcher',
+            )
+
+            raw = db.get_data_range('BTC-USD', date(2026, 4, 1), date(2026, 4, 10))
+            self.assertEqual(len(raw), 6)
+            # Naive cross-source ratio explodes: today (1e8) / mean(prev5 at 2.7e10) ≈ 0.0037,
+            # which is ~270x below the healthy ~1.0 baseline — a fake "extreme shrink" signal.
+            raw_volumes = [b.volume for b in raw]
+            naive_ratio = raw_volumes[-1] / (sum(raw_volumes[:-1]) / 5)
+            self.assertLess(naive_ratio, 0.01)
+            self.assertGreater(
+                1.0 / naive_ratio, 100.0,
+                f"expected >100x fake spike vs healthy ratio 1.0, got {1.0/naive_ratio:.1f}x",
+            )
+
+            consistent = db.get_source_consistent_tail(
+                'BTC-USD', date(2026, 4, 1), date(2026, 4, 10)
+            )
+            # Only the single CCXT day survives (< 5 rows → volume_ratio
+            # downstream degrades to default, which is the intended safer
+            # signal than a fake 1000× shrink)
+            self.assertEqual(len(consistent), 1)
+            self.assertEqual(consistent[0].data_source, 'CCXTCryptoFetcher')
+        finally:
+            DatabaseManager.reset_instance()
+
+    def test_ignores_non_crypto_unrelated_source_noise(self) -> None:
+        """
+        A stock with a stable single source across the whole window is
+        unaffected (no trimming, no warning).
+        """
+        db = self._build_db()
+        try:
+            for i in range(10):
+                self._save(
+                    db, 'AAPL', date(2026, 4, 1 + i),
+                    volume=5.0e7,
+                    source='YfinanceFetcher',
+                )
+            result = db.get_source_consistent_tail(
+                'AAPL', date(2026, 4, 1), date(2026, 4, 15)
+            )
+            self.assertEqual(len(result), 10)
+        finally:
+            DatabaseManager.reset_instance()
+
+
 if __name__ == '__main__':
     unittest.main()

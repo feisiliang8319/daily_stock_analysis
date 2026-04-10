@@ -31,7 +31,9 @@ def _fetch_trend_data(stock_code: str):
     # 1. Try DB
     try:
         db = get_db()
-        bars = db.get_data_range(code, start_date, end_date)
+        # 使用源一致的末尾切片，防止 CCXT (Kraken-only) 与 YFinance (全球聚合)
+        # 的 volume 单位在 rolling 窗口内混合产生 ~270× 的虚假信号。
+        bars = db.get_source_consistent_tail(code, start_date, end_date)
         if bars:
             df = pd.DataFrame([b.to_dict() for b in bars])
             logger.debug("analyze_trend(%s): loaded %d rows from DB", stock_code, len(df))

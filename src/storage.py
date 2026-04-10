@@ -1385,19 +1385,19 @@ class DatabaseManager:
             return result
     
     def get_data_range(
-        self, 
-        code: str, 
-        start_date: date, 
+        self,
+        code: str,
+        start_date: date,
         end_date: date
     ) -> List[StockDaily]:
         """
         获取指定日期范围的数据
-        
+
         Args:
             code: 股票代码
             start_date: 开始日期
             end_date: 结束日期
-            
+
         Returns:
             StockDaily 对象列表
         """
@@ -1413,8 +1413,68 @@ class DatabaseManager:
                 )
                 .order_by(StockDaily.date)
             ).scalars().all()
-            
+
             return list(results)
+
+    def get_source_consistent_tail(
+        self,
+        code: str,
+        start_date: date,
+        end_date: date,
+    ) -> List[StockDaily]:
+        """
+        获取日期窗口内与最新一行 ``data_source`` 相同的**末尾连续切片**。
+
+        用途：下游 ``_analyze_volume`` 等 rolling 指标对 ``stock_daily.volume``
+        做跨日聚合。``stock_daily`` 允许多 fetcher 交替写入同一个 code
+        （例如 ``CCXTCryptoFetcher`` 与 ``YfinanceFetcher`` 都会写 ``BTC-USD``），
+        CCXT 返回的是**单交易所 base-currency** 成交量（已在 fetcher 内部按
+        T-1 close 归一化为 USD notional，但仅覆盖单交易所份额，例如 Kraken
+        约占 BTC 全球份额 0.37%），YfinanceFetcher 返回的是**全球聚合**
+        USD notional，两者绝对量级相差约 270×。若 rolling window 混合两种源，
+        ``volume_ratio_5d`` 会出现 ~270× / ~1/270× 的虚假暴量 / 缩量信号。
+
+        本方法保留与最新一行 ``data_source`` 相同的末尾连续切片，使下游 rolling
+        始终在单一数据源内进行，避免跨源单位污染。
+
+        注意：若源在窗口尾部切换导致同源切片 < 5 行，下游 ``volume_ratio_5d``
+        会降级为默认值（通常 1.0 或 0.0），这是有意为之：宁愿让 LLM 看到
+        "数据量不足" 也不让 LLM 看到"假 270× 暴量"。
+
+        Args:
+            code: 股票代码
+            start_date: 窗口开始日期（包含）
+            end_date: 窗口结束日期（包含）
+
+        Returns:
+            ``StockDaily`` 列表（按日期升序），仅包含与最新一行同源的末尾切片。
+            窗口为空时返回空列表；窗口内所有行同源时等价于完整窗口。
+        """
+        bars = self.get_data_range(code, start_date, end_date)
+        if not bars:
+            return []
+
+        # get_data_range 按 date 升序返回，末尾即最新一行。
+        latest_source = bars[-1].data_source
+        contiguous: List[StockDaily] = []
+        for bar in reversed(bars):
+            if bar.data_source == latest_source:
+                contiguous.append(bar)
+            else:
+                break
+        contiguous.reverse()
+
+        trimmed = len(bars) - len(contiguous)
+        if trimmed > 0:
+            logger.warning(
+                "%s 跨源切片裁剪 %d → %d 行 "
+                "(latest_source=%s, 丢弃旧源行以避免 volume 单位污染)",
+                code,
+                len(bars),
+                len(contiguous),
+                latest_source,
+            )
+        return contiguous
     
     def save_daily_data(
         self, 

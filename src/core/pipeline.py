@@ -361,7 +361,12 @@ class StockAnalysisPipeline:
                 _mkt = get_market_for_stock(normalize_stock_code(code))
                 end_date = get_market_now(_mkt).date()
                 start_date = end_date - timedelta(days=89)  # ~60 trading days for MA60
-                historical_bars = self.db.get_data_range(code, start_date, end_date)
+                # 使用源一致的末尾切片，防止 CCXT (Kraken-only)
+                # 与 YFinance (全球聚合) 的 volume 单位在 rolling 窗口内混合
+                # 产生 ~270× 的虚假暴量 / 缩量信号（仅影响交替源写入的代码）。
+                historical_bars = self.db.get_source_consistent_tail(
+                    code, start_date, end_date
+                )
                 if historical_bars:
                     df = pd.DataFrame([bar.to_dict() for bar in historical_bars])
                     # Issue #234: Augment with realtime for intraday MA calculation
