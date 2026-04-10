@@ -258,10 +258,21 @@ class StockAnalysisPipeline:
             # 获取股票名称（先走轻量名称路径，后续若 realtime_quote 有 name 再覆盖）
             stock_name = self.fetcher_manager.get_stock_name(code, allow_realtime=False)
 
+            # 检测市场类型：crypto/美股不需要 A 股专属数据（实时行情/筹码/板块）
+            from data_provider.us_index_mapping import is_crypto_code, is_us_stock_code, is_us_index_code
+            _code_upper = (code or "").strip().upper()
+            _is_non_cn_market = (
+                is_crypto_code(_code_upper)
+                or is_us_stock_code(_code_upper)
+                or is_us_index_code(_code_upper)
+            )
+
             # Step 1: 获取实时行情（量比、换手率等）- 使用统一入口，自动故障切换
             realtime_quote = None
             try:
-                if self.config.enable_realtime_quote:
+                if _is_non_cn_market:
+                    logger.info(f"{stock_name}({code}) 非 A 股市场，跳过 A 股实时行情链路")
+                elif self.config.enable_realtime_quote:
                     realtime_quote = self.fetcher_manager.get_realtime_quote(code, log_final_failure=False)
                     if realtime_quote:
                         # 使用实时行情返回的真实股票名称
@@ -284,10 +295,13 @@ class StockAnalysisPipeline:
             if not stock_name:
                 stock_name = f'股票{code}'
 
-            # Step 2: 获取筹码分布 - 使用统一入口，带熔断保护
+            # Step 2: 获取筹码分布 - A 股专属，crypto/美股跳过
             chip_data = None
             try:
-                chip_data = self.fetcher_manager.get_chip_distribution(code)
+                if _is_non_cn_market:
+                    logger.info(f"{stock_name}({code}) 非 A 股市场，跳过筹码分布")
+                else:
+                    chip_data = self.fetcher_manager.get_chip_distribution(code)
                 if chip_data:
                     logger.info(f"{stock_name}({code}) 筹码分布: 获利比例={chip_data.profit_ratio:.1%}, "
                               f"90%集中度={chip_data.concentration_90:.2%}")

@@ -15,6 +15,7 @@
 """
 
 import logging
+import os
 import random
 import time
 from threading import BoundedSemaphore, RLock, Thread
@@ -844,34 +845,18 @@ class DataFetcherManager:
         """
         初始化默认数据源列表
 
-        优先级动态调整逻辑：
-        - 如果配置了 TUSHARE_TOKEN：Tushare 优先级提升为 0（最高）
-        - 否则按默认优先级：
-          0. EfinanceFetcher (Priority 0) - 最高优先级
-          1. AkshareFetcher (Priority 1)
-          2. PytdxFetcher (Priority 2) - 通达信
-          2. TushareFetcher (Priority 2)
-          3. BaostockFetcher (Priority 3)
-          4. YfinanceFetcher (Priority 4)
-          5. LongbridgeFetcher (Priority 5) - 长桥（美股/港股兜底）
+        MARKET_FOCUS 控制：
+        - "crypto+us" (默认): 只加载 CCXT + yfinance + longbridge，跳过所有 A 股 fetcher
+        - "all": 全量加载（A 股 + 港股 + 美股 + crypto）兼容上游
         """
-        from .efinance_fetcher import EfinanceFetcher
-        from .akshare_fetcher import AkshareFetcher
-        from .tushare_fetcher import TushareFetcher
-        from .pytdx_fetcher import PytdxFetcher
-        from .baostock_fetcher import BaostockFetcher
         from .yfinance_fetcher import YfinanceFetcher
         from .longbridge_fetcher import LongbridgeFetcher
-        # 创建所有数据源实例（优先级在各 Fetcher 的 __init__ 中确定）
-        efinance = EfinanceFetcher()
-        akshare = AkshareFetcher()
-        tushare = TushareFetcher()  # 会根据 Token 配置自动调整优先级
-        pytdx = PytdxFetcher()      # 通达信数据源（可配 PYTDX_HOST/PYTDX_PORT）
-        baostock = BaostockFetcher()
-        yfinance = YfinanceFetcher()
-        longbridge = LongbridgeFetcher()  # 长桥（美股/港股兜底，懒加载）
 
-        # CCXT crypto fetcher（仅响应 crypto 代码，对其他代码返回空让链路继续）
+        market_focus = os.getenv("MARKET_FOCUS", "crypto+us").lower()
+
+        yfinance = YfinanceFetcher()
+        longbridge = LongbridgeFetcher()
+
         ccxt_crypto = None
         try:
             from .ccxt_crypto_fetcher import CCXTCryptoFetcher
@@ -879,18 +864,29 @@ class DataFetcherManager:
         except ImportError:
             logger.warning("ccxt 未安装，跳过 CCXTCryptoFetcher（pip install ccxt）")
 
-        # 初始化数据源列表
         self._ensure_concurrency_guards()
         with self._fetchers_lock:
-            self._fetchers = [
-                efinance,
-                akshare,
-                tushare,
-                pytdx,
-                baostock,
-                yfinance,
-                longbridge,
-            ]
+            if market_focus == "all":
+                # 兼容模式：加载全部 fetcher（包含中国数据源）
+                from .efinance_fetcher import EfinanceFetcher
+                from .akshare_fetcher import AkshareFetcher
+                from .tushare_fetcher import TushareFetcher
+                from .pytdx_fetcher import PytdxFetcher
+                from .baostock_fetcher import BaostockFetcher
+                self._fetchers = [
+                    EfinanceFetcher(),
+                    AkshareFetcher(),
+                    TushareFetcher(),
+                    PytdxFetcher(),
+                    BaostockFetcher(),
+                    yfinance,
+                    longbridge,
+                ]
+            else:
+                # crypto+us 模式（默认）：仅加载 CCXT/yfinance/longbridge
+                self._fetchers = [yfinance, longbridge]
+                logger.info(f"[MARKET_FOCUS={market_focus}] 跳过所有 A 股 fetcher（efinance/akshare/tushare/pytdx/baostock）")
+
             if ccxt_crypto is not None:
                 self._fetchers.insert(0, ccxt_crypto)
 
