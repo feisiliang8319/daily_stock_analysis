@@ -28,6 +28,7 @@ except ModuleNotFoundError:
     sys.modules["litellm"] = MagicMock()
 
 from data_provider.ccxt_crypto_fetcher import CCXTCryptoFetcher
+from data_provider.realtime_types import RealtimeSource, UnifiedRealtimeQuote
 
 
 class _FakeExchange:
@@ -192,6 +193,17 @@ class CCXTVolumeNormalizationTest(unittest.TestCase):
         df = fetcher.get_daily_data("AAPL", days=3)
         self.assertTrue(df.empty)
 
+    def test_realtime_method_name_matches_manager_router(self) -> None:
+        """``DataFetcherManager.get_realtime_quote`` routes fetchers by the
+        presence of a ``get_realtime_quote`` attribute (hasattr check). The
+        CCXT fetcher MUST expose that exact name or it will be silently
+        skipped for every crypto realtime call. Regression guard for the
+        PR #1037 review bug where the method was named ``get_realtime_data``.
+        """
+        fetcher = CCXTCryptoFetcher.__new__(CCXTCryptoFetcher)
+        self.assertTrue(hasattr(fetcher, "get_realtime_quote"))
+        self.assertTrue(callable(getattr(fetcher, "get_realtime_quote")))
+
     def test_realtime_prefers_quote_volume_when_exchange_reports_it(self) -> None:
         """When the exchange already returns quoteVolume, use it verbatim."""
         ticker = {
@@ -206,11 +218,15 @@ class CCXTVolumeNormalizationTest(unittest.TestCase):
         }
         fetcher = self._fetcher_with_exchange(_FakeExchange([], ticker=ticker))
 
-        data = fetcher.get_realtime_data("BTC-USD")
+        quote = fetcher.get_realtime_quote("BTC-USD")
 
-        self.assertEqual(data["volume"], 12345678.90)
-        self.assertEqual(data["current"], 70000.0)
-        self.assertTrue(data["source"].startswith("ccxt:"))
+        self.assertIsInstance(quote, UnifiedRealtimeQuote)
+        self.assertEqual(quote.code, "BTC-USD")
+        self.assertEqual(quote.source, RealtimeSource.CCXT)
+        self.assertEqual(quote.amount, 12345678.90)
+        self.assertEqual(quote.price, 70000.0)
+        self.assertAlmostEqual(quote.change_amount, 1000.0)  # 70000 - 69000
+        self.assertEqual(quote.change_pct, 1.44)
 
     def test_realtime_falls_back_to_base_volume_times_last(self) -> None:
         """Without quoteVolume, volume = baseVolume * last."""
@@ -226,12 +242,14 @@ class CCXTVolumeNormalizationTest(unittest.TestCase):
         }
         fetcher = self._fetcher_with_exchange(_FakeExchange([], ticker=ticker))
 
-        data = fetcher.get_realtime_data("BTC-USD")
+        quote = fetcher.get_realtime_quote("BTC-USD")
 
-        self.assertEqual(data["volume"], 70_000_000.0)  # 1000 * 70000
+        self.assertIsInstance(quote, UnifiedRealtimeQuote)
+        self.assertEqual(quote.amount, 70_000_000.0)  # 1000 * 70000
+        self.assertEqual(quote.volume, 70_000_000)
 
-    def test_realtime_missing_both_volume_fields_returns_none(self) -> None:
-        """No baseVolume and no quoteVolume → volume field is None, not crash."""
+    def test_realtime_missing_both_volume_fields_returns_none_amount(self) -> None:
+        """No baseVolume and no quoteVolume → amount/volume None, not crash."""
         ticker = {
             "last": 70000.0,
             "open": 69000.0,
@@ -244,10 +262,17 @@ class CCXTVolumeNormalizationTest(unittest.TestCase):
         }
         fetcher = self._fetcher_with_exchange(_FakeExchange([], ticker=ticker))
 
-        data = fetcher.get_realtime_data("BTC-USD")
+        quote = fetcher.get_realtime_quote("BTC-USD")
 
-        self.assertIsNone(data["volume"])
-        self.assertEqual(data["current"], 70000.0)
+        self.assertIsInstance(quote, UnifiedRealtimeQuote)
+        self.assertIsNone(quote.amount)
+        self.assertIsNone(quote.volume)
+        self.assertEqual(quote.price, 70000.0)
+
+    def test_realtime_non_crypto_code_returns_none(self) -> None:
+        """Non-crypto tickers must return None so the manager falls through."""
+        fetcher = self._fetcher_with_exchange(_FakeExchange([], ticker={}))
+        self.assertIsNone(fetcher.get_realtime_quote("AAPL"))
 
 
 if __name__ == "__main__":

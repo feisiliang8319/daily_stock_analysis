@@ -170,11 +170,16 @@ def build_crypto_context(ticker: str) -> str:
         vol = global_data.get("total_volume_24h_usd")
         btc_dom = global_data.get("btc_dominance")
         mc_change = global_data.get("market_cap_change_24h_pct")
+        # CoinGecko occasionally returns null for any of these fields; formatting
+        # None with :+.1f / :.1f raises TypeError and aborts the whole function,
+        # dropping the entire crypto enrichment for that run. Guard each field.
         mc_str = f"${mc/1e12:.2f}T" if mc else "N/A"
         vol_str = f"${vol/1e9:.1f}B" if vol else "N/A"
+        mc_change_str = f"{mc_change:+.1f}%" if mc_change is not None else "N/A"
+        btc_dom_str = f"{btc_dom:.1f}%" if btc_dom is not None else "N/A"
         parts.append(
-            f"- **全球加密市场**: 总市值 {mc_str} (24h {mc_change:+.1f}%), "
-            f"24h 成交量 {vol_str}, BTC 主导率 {btc_dom:.1f}%"
+            f"- **全球加密市场**: 总市值 {mc_str} (24h {mc_change_str}), "
+            f"24h 成交量 {vol_str}, BTC 主导率 {btc_dom_str}"
         )
 
     # Coin-specific data
@@ -190,13 +195,21 @@ def build_crypto_context(ticker: str) -> str:
             supply = coin.get("circulating_supply")
             max_sup = coin.get("max_supply")
 
-            ath_str = f"${ath:,.0f} ({ath_chg:+.1f}%)" if ath else "N/A"
+            # Same defensive guards as above — any null from CoinGecko must not
+            # crash the enrichment path.
+            if ath is not None:
+                ath_chg_str = f"{ath_chg:+.1f}%" if ath_chg is not None else "N/A"
+                ath_str = f"${ath:,.0f} ({ath_chg_str})"
+            else:
+                ath_str = "N/A"
             supply_str = f"{supply/1e6:.1f}M" if supply else "N/A"
             max_str = f"{max_sup/1e6:.1f}M" if max_sup else "无上限"
+            p7d_str = f"{p7d:+.1f}%" if p7d is not None else "N/A"
+            p30d_str = f"{p30d:+.1f}%" if p30d is not None else "N/A"
 
             parts.append(
                 f"- **{ticker}**: 市值排名 #{rank}, ATH {ath_str}, "
-                f"7d {p7d:+.1f}%, 30d {p30d:+.1f}%, "
+                f"7d {p7d_str}, 30d {p30d_str}, "
                 f"流通量 {supply_str} / 最大 {max_str}"
             )
 
