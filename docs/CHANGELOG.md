@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 
+- [新功能] 新增 `CCXTCryptoFetcher` 加密货币数据源（基于 ccxt，默认 Kraken，可通过 `CCXT_EXCHANGE` 切换）。`is_crypto_code(code)` 识别 `BTC-USD`/`ETH-USD` 等格式后，`DataFetcherManager.get_daily_data` 优先走 CCXT 直连交易所、YFinance 兜底；`detect_market()` 新增 `crypto` 分支与对应分析指引；`trading_calendar` 将 crypto 视为 24/7 常开市场。ccxt 未安装时该数据源自动跳过，不影响现有 A 股 / 港股 / 美股链路。
+- [新功能] 新增 `data_provider.crypto_context_fetcher`：从 Alternative.me 拉取 Crypto Fear & Greed Index、从 CoinGecko 拉取全球加密市场概览与单币种指标，并在 `get_market_guidelines()` 返回的加密货币 prompt 中追加「实时市场数据」段，拉取失败时静默降级不阻塞分析。
+- [测试] 新增 `tests/test_ccxt_crypto_fetcher.py`（10 个用例），锁定 CCXT 日线 volume 归一化为 USD notional 的契约：以 `iloc[-2]`（前一交易日收盘价）作为常量乘子，rolling `volume_ratio` 相对原始 base-volume 零漂移（`places=10`），同一 UTC 日 intraday 多次拉取归一化结果完全一致；覆盖 1 行降级与 realtime `quoteVolume` 优先 / `baseVolume × last` 回退等边界。
 - [修复] 大盘复盘链路接入 `REPORT_LANGUAGE`：`REPORT_LANGUAGE=en` 时，A 股/合并复盘的 Prompt、章节标题、模板兜底文案与通知包装标题统一改为英文，避免出现英文正文外包中文标题的问题。
 - [修复] `AGENT_MAX_STEPS` 在 orchestrator 多 Agent 模式下统一明确为“默认作为各子 Agent 的步数上限而非硬覆盖；TechnicalAgent 等高默认值 Agent 会被封顶、低默认值 Agent 保持原值；当用户主动调高（>10）时，再统一覆盖所有子 Agent 采用全局值”，同时修复用户设置 12 但 TechnicalAgent 仍以默认 6 步运行并报 "Agent exceeded max steps" 的问题（fixes #1026）
 - [修复] Specialist（Skill）Agent 失败不再中断整个分析管线，改为与 intel/risk 相同的优雅降级策略

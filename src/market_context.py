@@ -2,9 +2,9 @@
 """
 Market context detection for LLM prompts.
 
-Detects the market (A-shares, HK, US) from a stock code and returns
-market-specific role descriptions so prompts are not hardcoded to a
-single market.
+Detects the market (A-shares, HK, US, crypto) from a stock code and
+returns market-specific role descriptions so prompts are not hardcoded
+to a single market.
 
 Fixes: https://github.com/ZhuLinsen/daily_stock_analysis/issues/644
 """
@@ -17,12 +17,16 @@ def detect_market(stock_code: Optional[str]) -> str:
     """Detect market from stock code.
 
     Returns:
-        One of 'cn', 'hk', 'us', or 'cn' as fallback.
+        One of 'cn', 'hk', 'us', 'crypto', or 'cn' as fallback.
     """
     if not stock_code:
         return "cn"
 
     code = stock_code.strip().upper()
+
+    # Crypto: BTC-USD, ETH-USD, SOL-USD etc. (2-10 uppercase letters + -USD)
+    if re.match(r'^[A-Z]{2,10}-USD$', code):
+        return "crypto"
 
     # HK stocks: HK00700, 00700.HK, or 5-digit pure numbers
     if code.startswith("HK") or code.endswith(".HK"):
@@ -58,6 +62,10 @@ _MARKET_ROLES = {
         "zh": "美股",
         "en": "US stock",
     },
+    "crypto": {
+        "zh": "加密货币",
+        "en": "Cryptocurrency",
+    },
 }
 
 _MARKET_GUIDELINES = {
@@ -91,6 +99,20 @@ _MARKET_GUIDELINES = {
             "- US stocks have no daily price limits (but have circuit breakers), allow T+0 and pre/after-market trading. Consider USD FX, Fed policy, and SEC regulations."
         ),
     },
+    "crypto": {
+        "zh": (
+            "- 本次分析对象为 **加密货币**（去中心化数字资产）。\n"
+            "- 7×24 小时全球交易，无涨跌停限制，无熔断机制，波动性显著高于传统股票。\n"
+            "- 需关注：链上数据、市场情绪（Fear & Greed Index）、BTC 主导率、监管政策、鲸鱼动向、资金费率。\n"
+            "- 价格受 FOMO/FUD 情绪驱动显著，技术分析需结合链上指标。"
+        ),
+        "en": (
+            "- This analysis covers a **cryptocurrency** (decentralized digital asset).\n"
+            "- Trades 24/7 globally, no price limits, no circuit breakers, significantly more volatile than traditional equities.\n"
+            "- Consider: on-chain data, Fear & Greed Index, BTC dominance, regulatory news, whale movements, funding rates.\n"
+            "- Price is heavily sentiment-driven (FOMO/FUD); combine technical analysis with on-chain metrics."
+        ),
+    },
 }
 
 
@@ -112,6 +134,11 @@ def get_market_role(stock_code: Optional[str], lang: str = "zh") -> str:
 def get_market_guidelines(stock_code: Optional[str], lang: str = "zh") -> str:
     """Return market-specific analysis guidelines for LLM prompt.
 
+    For crypto assets we additionally append live market context
+    (Fear & Greed Index, global crypto market, coin-level metrics)
+    fetched by ``data_provider.crypto_context_fetcher``. Context fetch
+    failures are swallowed so missing live data never blocks analysis.
+
     Args:
         stock_code: The stock code being analyzed.
         lang: 'zh' or 'en'.
@@ -121,4 +148,18 @@ def get_market_guidelines(stock_code: Optional[str], lang: str = "zh") -> str:
     """
     market = detect_market(stock_code)
     lang_key = "en" if lang == "en" else "zh"
-    return _MARKET_GUIDELINES.get(market, _MARKET_GUIDELINES["cn"])[lang_key]
+    guidelines = _MARKET_GUIDELINES.get(market, _MARKET_GUIDELINES["cn"])[lang_key]
+
+    # Crypto: append live market context (Fear & Greed, global data, coin data)
+    if market == "crypto" and stock_code:
+        try:
+            from data_provider.crypto_context_fetcher import build_crypto_context
+            crypto_ctx = build_crypto_context(stock_code.strip().upper())
+            if crypto_ctx:
+                label = "**实时市场数据：**" if lang_key == "zh" else "**Live market context:**"
+                guidelines += f"\n\n{label}\n{crypto_ctx}"
+        except Exception:
+            # Graceful degradation: missing live context must not block analysis
+            pass
+
+    return guidelines

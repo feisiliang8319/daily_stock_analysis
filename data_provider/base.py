@@ -872,6 +872,18 @@ class DataFetcherManager:
         yfinance = YfinanceFetcher()
         longbridge = LongbridgeFetcher()  # 长桥（美股/港股兜底，懒加载）
 
+        # CCXT 加密货币数据源（可选：仅在 ccxt 已安装时启用）
+        # 仅响应 crypto 代码（BTC-USD 等），对其他代码返回空让链路继续。
+        ccxt_crypto = None
+        try:
+            from .ccxt_crypto_fetcher import CCXTCryptoFetcher
+            ccxt_crypto = CCXTCryptoFetcher()
+        except ImportError:
+            logger.debug(
+                "ccxt 未安装，跳过 CCXTCryptoFetcher "
+                "（pip install ccxt 以启用 crypto 数据源）"
+            )
+
         # 初始化数据源列表
         self._ensure_concurrency_guards()
         with self._fetchers_lock:
@@ -884,6 +896,8 @@ class DataFetcherManager:
                 yfinance,
                 longbridge,
             ]
+            if ccxt_crypto is not None:
+                self._fetchers.append(ccxt_crypto)
 
             # 按优先级排序（Tushare 如果配置了 Token 且初始化成功，优先级为 0）
             self._fetchers.sort(key=lambda f: f.priority)
@@ -928,7 +942,7 @@ class DataFetcherManager:
         Raises:
             DataFetchError: 所有数据源都失败时抛出
         """
-        from .us_index_mapping import is_us_index_code, is_us_stock_code
+        from .us_index_mapping import is_us_index_code, is_us_stock_code, is_crypto_code
 
         # Normalize code (strip SH/SZ prefix etc.)
         stock_code = normalize_stock_code(stock_code)
@@ -938,13 +952,58 @@ class DataFetcherManager:
         total_fetchers = len(fetchers)
         request_start = time.time()
 
-        # 快速路径：美股/港股使用专用数据源路由
+        # 快速路径：crypto/美股/港股使用专用数据源路由
+        #   - crypto:         CCXTCryptoFetcher 为首选（直连交易所），YFinance 兜底
         #   - 配置长桥凭据后: Longbridge 为首选, YFinance/AkShare 兜底
         #   - 未配置长桥:     YFinance 为首选（美股）, 通用 fetcher 循环（港股）
         #   - 美股指数:       始终 YFinance 为首选（Longbridge 不提供指数K线）
+        is_crypto = is_crypto_code(stock_code)
         is_us_index = is_us_index_code(stock_code)
         is_us = is_us_index or is_us_stock_code(stock_code)
-        is_hk = (not is_us) and _is_hk_market(stock_code)
+        is_hk = (not is_us) and (not is_crypto) and _is_hk_market(stock_code)
+
+        # 加密货币：CCXTCryptoFetcher（若已安装）首选，YfinanceFetcher 兜底。
+        if is_crypto:
+            source_order = ["CCXTCryptoFetcher", "YfinanceFetcher"]
+            for src_name in source_order:
+                for attempt, fetcher in enumerate(fetchers, start=1):
+                    if fetcher.name != src_name:
+                        continue
+                    try:
+                        role = "首选" if src_name == source_order[0] else "兜底"
+                        logger.info(
+                            f"[数据源尝试 {attempt}/{total_fetchers}] [{fetcher.name}] "
+                            f"crypto {stock_code} {role}路由..."
+                        )
+                        df = self._call_fetcher_method(
+                            fetcher,
+                            "get_daily_data",
+                            stock_code=stock_code,
+                            start_date=start_date,
+                            end_date=end_date,
+                            days=days,
+                        )
+                        if df is not None and not df.empty:
+                            elapsed = time.time() - request_start
+                            logger.info(
+                                f"[数据源完成] {stock_code} 使用 [{fetcher.name}] 获取成功: "
+                                f"rows={len(df)}, elapsed={elapsed:.2f}s"
+                            )
+                            return df, fetcher.name
+                    except Exception as e:
+                        error_type, error_reason = summarize_exception(e)
+                        error_msg = f"[{fetcher.name}] ({error_type}) {error_reason}"
+                        logger.warning(
+                            f"[数据源失败 {attempt}/{total_fetchers}] [{fetcher.name}] {stock_code}: "
+                            f"error_type={error_type}, reason={error_reason}"
+                        )
+                        errors.append(error_msg)
+                    break
+
+            error_summary = f"crypto {stock_code} 获取失败:\n" + "\n".join(errors)
+            elapsed = time.time() - request_start
+            logger.error(f"[数据源终止] {stock_code} 获取失败: elapsed={elapsed:.2f}s\n{error_summary}")
+            raise DataFetchError(error_summary)
 
         # 美股（含美股指数）使用 Longbridge/YFinance 特殊路由；港股走下方通用数据源循环
         if is_us:

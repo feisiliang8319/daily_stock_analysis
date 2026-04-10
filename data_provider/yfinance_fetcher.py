@@ -33,7 +33,7 @@ from tenacity import (
 
 from .base import BaseFetcher, DataFetchError, STANDARD_COLUMNS, is_bse_code
 from .realtime_types import UnifiedRealtimeQuote, RealtimeSource
-from .us_index_mapping import get_us_index_yf_symbol, is_us_stock_code
+from .us_index_mapping import get_us_index_yf_symbol, is_us_stock_code, is_crypto_code
 
 # 可选导入本地股票映射补丁，若缺失则使用空字典兜底
 try:
@@ -113,6 +113,11 @@ class YfinanceFetcher(BaseFetcher):
         # 美股：1-5 个大写字母（可选 .X 后缀），原样返回
         if is_us_stock_code(code):
             logger.debug(f"识别为美股代码: {code}")
+            return code
+
+        # 加密货币：BTC-USD, ETH-USD 等，yfinance 原生支持，原样返回作为 YF ticker
+        if is_crypto_code(code):
+            logger.debug(f"识别为加密货币: {code}")
             return code
 
         # 港股：hk前缀 -> .HK后缀

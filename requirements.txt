@@ -17,6 +17,7 @@ pytdx>=1.72                 # Priority 2: 通达信行情服务器
 baostock>=0.8.0             # Priority 3: 证券宝数据
 yfinance>=0.2.0             # Priority 4: Yahoo Finance (Fallback)
 longbridge>=0.2.0           # Priority 5: 长桥 OpenAPI（美股/港股兜底）
+ccxt>=4.0.0                 # Optional: 加密货币 OHLCV（100+ 交易所统一接口；仅分析加密货币标的时需要）
 tickflow>=0.1.0            # TickFlow official SDK (Issue #632, market review enhancement)
 
 #飞书

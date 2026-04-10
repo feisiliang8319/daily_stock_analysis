@@ -16,6 +16,9 @@ import re
 # 美股代码正则：1-5 个大写字母，可选 .X 后缀（如 BRK.B）
 _US_STOCK_PATTERN = re.compile(r'^[A-Z]{1,5}(\.[A-Z])?$')
 
+# 加密货币代码正则：2-10 个大写字母 + -USD 后缀（如 BTC-USD, ETH-USD）
+_CRYPTO_PATTERN = re.compile(r'^[A-Z]{2,10}-USD$')
+
 
 # 用户输入 -> (Yahoo Finance 符号, 中文名称)
 US_INDEX_MAPPING = {
@@ -60,6 +63,31 @@ def is_us_index_code(code: str) -> bool:
         False
     """
     return (code or '').strip().upper() in US_INDEX_MAPPING
+
+
+def is_crypto_code(code: str) -> bool:
+    """
+    判断代码是否为加密货币符号（如 BTC-USD, ETH-USD）。
+
+    加密货币代码格式为 2-10 个大写字母 + ``-USD`` 后缀，例如
+    ``BTC-USD``、``ETH-USD``、``SOL-USD``。与 Yahoo Finance 原生
+    的加密货币 ticker 约定保持一致。
+
+    Args:
+        code: 股票/资产代码
+
+    Returns:
+        True 表示是加密货币符号，否则 False
+
+    Examples:
+        >>> is_crypto_code('BTC-USD')
+        True
+        >>> is_crypto_code('AAPL')
+        False
+        >>> is_crypto_code('600519')
+        False
+    """
+    return bool(_CRYPTO_PATTERN.match((code or '').strip().upper()))
 
 
 def is_us_stock_code(code: str) -> bool:
