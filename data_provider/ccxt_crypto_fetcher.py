@@ -140,16 +140,39 @@ class CCXTCryptoFetcher(BaseFetcher):
 
             # Volume normalization: ccxt.fetch_ohlcv returns BASE currency
             # volume (e.g. BTC for BTC/USD) from a single exchange, whereas
-            # YfinanceFetcher returns USD **notional** volume aggregated across
-            # venues. Mixing both in the same ``stock_daily`` table (CCXT
-            # primary + YF fallback) breaks downstream volume_ratio_5d and
-            # volume_anomaly signals by ~6 orders of magnitude. To keep the
-            # unit stable across source switches, convert base volume to a
-            # USD-notional proxy (``volume * close``). Kraken is still a
-            # single venue, so the magnitude remains ~0.3-0.4% of the true
-            # global notional — the relative ratios within a rolling window
-            # are what the signals actually consume, and those are preserved.
-            df["volume"] = (df["volume"].astype(float) * df["close"].astype(float)).round(2)
+            # YfinanceFetcher returns USD **notional** volume aggregated
+            # across venues. Mixing both in the same ``stock_daily`` table
+            # (CCXT primary + YF fallback) breaks downstream
+            # volume_ratio_5d and volume_anomaly signals by ~6 orders of
+            # magnitude. To keep the unit stable across source switches,
+            # convert base volume to a USD-notional proxy.
+            #
+            # We deliberately scale every row by the **previous day's close**
+            # rather than each row's own close. Reasoning:
+            #
+            # 1. ``data_provider.base.DataFetcherManager._calculate_indicators``
+            #    computes ``volume_ratio = today_volume / mean(prev5_volume)``
+            #    on the fetcher output. If we used each row's own close, the
+            #    ratio would pick up a ``today_close / weighted_mean_prev5_close``
+            #    bias factor that drifts ±5-10% on a trending day. Multiplying
+            #    every row by the same constant cancels in the ratio and
+            #    restores zero drift vs the raw base-volume ratio.
+            #
+            # 2. We use the previous day's close (``iloc[-2]``) instead of the
+            #    last row's close (``iloc[-1]``) so multiple intraday fetches
+            #    on the same UTC day all produce identical normalized values
+            #    (today's bar is intraday-partial and its close moves; the
+            #    previous day's close is closed and stable). DB upserts then
+            #    stay deterministic across cron retries.
+            #
+            # Single-row batches (degenerate) fall back to that row's own
+            # close so the normalization stays well-defined.
+            if not df.empty:
+                if len(df) >= 2:
+                    scale = float(df["close"].iloc[-2])
+                else:
+                    scale = float(df["close"].iloc[-1])
+                df["volume"] = (df["volume"].astype(float) * scale).round(2)
 
             # 过滤日期范围
             if end_date:
