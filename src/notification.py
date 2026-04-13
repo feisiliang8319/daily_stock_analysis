@@ -51,6 +51,22 @@ from src.notification_sender import (
 logger = logging.getLogger(__name__)
 
 
+def _fmt_pct(value, sign: bool = False) -> str:
+    """Format a numeric value to 2 decimal places, or 'N/A' if None.
+
+    Args:
+        value: The numeric value (or None).
+        sign: If True, prepend '+' for positive values (useful for bias).
+    """
+    if value is None:
+        return "N/A"
+    try:
+        fmt = f"{float(value):+.2f}" if sign else f"{float(value):.2f}"
+        return fmt
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def _coerce_str_list(value: Any, max_items: Optional[int] = None) -> List[str]:
     """
     Defensively coerce an LLM-returned field into ``List[str]``.
@@ -1049,7 +1065,7 @@ class NotificationService(
                             f"| {labels['ma5_label']} | {price_data.get('ma5', 'N/A')} |",
                             f"| {labels['ma10_label']} | {price_data.get('ma10', 'N/A')} |",
                             f"| {labels['ma20_label']} | {price_data.get('ma20', 'N/A')} |",
-                            f"| {labels['bias_ma5_label']} | {price_data.get('bias_ma5', 'N/A')}% {bias_status} |",
+                            f"| {labels['bias_ma5_label']} | {_fmt_pct(price_data.get('bias_ma5'), sign=True)}% {bias_status} |",
                             f"| {labels['support_level_label']} | {price_data.get('support_level', 'N/A')} |",
                             f"| {labels['resistance_level_label']} | {price_data.get('resistance_level', 'N/A')} |",
                             "",
@@ -1058,7 +1074,7 @@ class NotificationService(
                     if vol_data:
                         report_lines.extend([
                             f"**{labels['volume_label']}**: {labels['volume_ratio_label']} {vol_data.get('volume_ratio', 'N/A')} ({vol_data.get('volume_status', '')}) | "
-                            f"{labels['turnover_rate_label']} {vol_data.get('turnover_rate', 'N/A')}%",
+                            f"{labels['turnover_rate_label']} {_fmt_pct(vol_data.get('turnover_rate'))}%",
                             f"💡 *{vol_data.get('volume_meaning', '')}*",
                             "",
                         ])
@@ -1622,7 +1638,7 @@ class NotificationService(
                 f"| {labels['current_price_label']} | {labels['volume_ratio_label']} | {labels['turnover_rate_label']} | {labels['source_label']} |",
                 "|-------|------|--------|----------|",
                 f"| {snapshot.get('price', 'N/A')} | {snapshot.get('volume_ratio', 'N/A')} | "
-                f"{snapshot.get('turnover_rate', 'N/A')} | {display_source} |",
+                f"{_fmt_pct(snapshot.get('turnover_rate'))} | {display_source} |",
             ])
 
         lines.append("")
