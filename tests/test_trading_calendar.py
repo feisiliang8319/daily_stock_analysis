@@ -167,6 +167,25 @@ class EffectiveTradingDateTestCase(unittest.TestCase):
 
         self.assertEqual(result, date(2026, 3, 28))
 
+    def test_crypto_effective_trading_date_returns_yesterday_utc(self):
+        """Crypto 24/7: today's bar is in progress until 00:00 UTC next day.
+
+        get_effective_trading_date("crypto") must return yesterday's UTC date so
+        pipeline resume logic never reuses today's intraday-partial bar as a
+        final completed value. Regression guard for ZhuLinsen review blocker:
+        MARKET_EXCHANGE["crypto"]=None previously fell through to fail-open
+        returning today's UTC date, which froze partial bars all day.
+        """
+        current_time = datetime(2026, 4, 13, 15, 30, tzinfo=timezone.utc)
+        result = trading_calendar.get_effective_trading_date("crypto", current_time=current_time)
+        self.assertEqual(result, date(2026, 4, 12))
+
+    def test_crypto_effective_trading_date_at_utc_midnight(self):
+        """At UTC 00:00:01 of a new day, yesterday is still the last complete bar."""
+        current_time = datetime(2026, 4, 14, 0, 0, 1, tzinfo=timezone.utc)
+        result = trading_calendar.get_effective_trading_date("crypto", current_time=current_time)
+        self.assertEqual(result, date(2026, 4, 13))
+
 
 if __name__ == "__main__":
     unittest.main()

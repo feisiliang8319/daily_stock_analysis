@@ -28,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] Agent IntelAgent 新增公司公告搜索维度（上交所/深交所/cninfo）与主力资金流工具（get_capital_flow），修复 Agent 模式下公告和资金流数据经常缺失的问题
 - [修复] webui_frontend.py 在 static/index.html 存在但 static/assets/ 缺失时发出明确警告，避免用户因 CSS/JS 资源缺失导致页面元素异常变大却无从排查
 - [修复] `StockAnalysisPipeline` 搜索服务与社交舆情服务改为可选降级初始化：任一服务初始化异常时记录 warning 并以禁用状态继续运行，避免外部依赖抖动阻塞主分析链路与 SSE 进度回调。
+- [修复] `CCXTCryptoFetcher.get_daily_data()` 补全 BaseFetcher 标准列契约（amount/pct_chg/ma5/ma10/ma20/volume_ratio）：原实现直接返回裸 OHLCV 未调用 `_calculate_indicators()`，`storage.save_daily_data()` 整行 upsert 会将这些列写 NULL，导致加密货币 volume_ratio/ma* 信号全部失效（fixes PR #1037 P1-1）。
+- [修复] `trading_calendar.get_effective_trading_date("crypto")` 改为返回昨日 UTC 日期：MARKET_EXCHANGE["crypto"]=None 原先触发 fail-open 回落当前 UTC 自然日，pipeline resume 逻辑将 intraday-partial 24/7 bar 误判为已完结；同步补充 `timedelta` 缺失导入（fixes PR #1037 P1-2）。
+- [测试] `test_ccxt_crypto_fetcher.py` 新增标准列契约回归守卫；`test_trading_calendar.py` 新增 crypto 有效交易日两个回归守卫（15:30 UTC 返回昨日，00:00:01 UTC 仍返回前日）。
 - [文档] DEPLOY.md 和 deploy-webui-cloud.md 新增"UI 元素异常变大/布局错乱"排查步骤（重建 Docker 镜像或手动执行 npm run build）
 - [文档] 补充飞书 Webhook 配置说明：强调 `FEISHU_WEBHOOK_URL` 是群通知必填项、`FEISHU_WEBHOOK_SECRET` 与飞书机器人「签名校验」必须两端同时启用或同时关闭、`FEISHU_APP_SECRET` 仅用于应用/Stream Bot 模式不可替代 Webhook；同步完善英文指南并在 `.env.example` 为相关配置项补充内联说明注释
 

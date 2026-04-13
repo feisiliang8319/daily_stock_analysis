@@ -181,6 +181,32 @@ class CCXTVolumeNormalizationTest(unittest.TestCase):
         self.assertEqual(len(df), 1)
         self.assertAlmostEqual(df["volume"].iloc[0], 100.0 * 60500.0, places=2)
 
+    def test_daily_data_includes_standard_output_columns(self) -> None:
+        """get_daily_data() must return all columns required by BaseFetcher contract.
+
+        ZhuLinsen review blocker (PR #1037): missing amount/pct_chg/ma*/volume_ratio
+        caused storage.save_daily_data() upserts to null-out these fields in the DB.
+        """
+        ohlcv = [
+            [1712102400000 + i * 86400000, 60000.0, 61000.0, 59000.0, 60000.0 + i * 100, 1.0]
+            for i in range(6)
+        ]
+        fetcher = self._fetcher_with_exchange(_FakeExchange(ohlcv))
+        df = fetcher.get_daily_data("BTC-USD", days=6)
+
+        required = {"amount", "pct_chg", "ma5", "ma10", "ma20", "volume_ratio"}
+        missing = required - set(df.columns)
+        self.assertEqual(missing, set(), f"Missing standard columns: {missing}")
+
+        # amount == volume (both USD-notional for crypto)
+        for a, v in zip(df["amount"].tolist(), df["volume"].tolist()):
+            self.assertAlmostEqual(a, v, places=2)
+
+        # pct_chg: first row has no prior close → 0.0
+        self.assertAlmostEqual(df["pct_chg"].iloc[0], 0.0, places=4)
+        # subsequent rows positive (close is trending up by +100 per step)
+        self.assertGreater(df["pct_chg"].iloc[-1], 0.0)
+
     def test_daily_empty_response_returns_empty_df(self) -> None:
         """Empty OHLCV response must not crash the normalization path."""
         fetcher = self._fetcher_with_exchange(_FakeExchange([]))

@@ -182,6 +182,16 @@ class CCXTCryptoFetcher(BaseFetcher):
                 df = df[df["date"] >= start_date]
 
             df = df.tail(days).reset_index(drop=True)
+
+            # Add derived columns to match BaseFetcher standard daily-bar contract
+            # so storage.save_daily_data() upserts don't null-out these fields.
+            # amount: total transaction value; volume is already USD-notional.
+            df["amount"] = df["volume"]
+            # pct_chg: daily percentage change; first row has no prior close → 0.
+            df["pct_chg"] = (df["close"].pct_change() * 100).fillna(0.0).round(4)
+            # ma5/ma10/ma20/volume_ratio via standard indicator pipeline.
+            df = self._calculate_indicators(df)
+
             logger.info(
                 f"[CCXT] {pair} ({self.exchange_id}) 获取成功: {len(df)} 行 (volume normalized to USD notional)"
             )

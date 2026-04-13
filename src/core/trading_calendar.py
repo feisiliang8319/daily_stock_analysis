@@ -13,7 +13,7 @@
 """
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Optional, Set
 from zoneinfo import ZoneInfo
 
@@ -137,6 +137,14 @@ def get_effective_trading_date(
     """
     market_now = get_market_now(market, current_time=current_time)
     fallback_date = market_now.date()
+
+    # Crypto trades 24/7: a UTC-day bar is still in progress until 00:00 UTC
+    # next day. Return yesterday as the last *complete* bar, consistent with
+    # the semantics used for regular markets (bar not yet closed → previous
+    # completed session). This prevents pipeline resume logic from treating
+    # today's intraday-partial bar as a reusable final value.
+    if market == "crypto":
+        return fallback_date - timedelta(days=1)
 
     if not _XCALS_AVAILABLE:
         return fallback_date
