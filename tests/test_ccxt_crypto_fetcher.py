@@ -275,5 +275,101 @@ class CCXTVolumeNormalizationTest(unittest.TestCase):
         self.assertIsNone(fetcher.get_realtime_quote("AAPL"))
 
 
+class TestManagerRealtimeQuoteCryptoRouting(unittest.TestCase):
+    """Integration test: DataFetcherManager.get_realtime_quote routes crypto
+    tickers to CCXTCryptoFetcher, NOT to A-share sources.
+
+    Regression guard for PR #1037 P1 blocker: prior to the crypto fast path,
+    BTC-USD did not match the US-stock regex (contains '-'), fell through to
+    the A-share source loop (efinance/akshare/tushare), and silently returned
+    None.
+    """
+
+    def _build_manager_with_mock_ccxt(self, quote_return):
+        """Create a DataFetcherManager with a mocked CCXTCryptoFetcher."""
+        from data_provider.base import DataFetcherManager
+
+        mgr = DataFetcherManager.__new__(DataFetcherManager)
+        mgr._fetchers = []
+        mgr._fetchers_lock = __import__("threading").Lock()
+
+        mock_fetcher = MagicMock()
+        mock_fetcher.name = "CCXTCryptoFetcher"
+        mock_fetcher.get_realtime_quote = MagicMock(return_value=quote_return)
+        mgr._fetchers.append(mock_fetcher)
+
+        # Add a YfinanceFetcher mock as fallback
+        yf_mock = MagicMock()
+        yf_mock.name = "YfinanceFetcher"
+        yf_mock.get_realtime_quote = MagicMock(return_value=None)
+        mgr._fetchers.append(yf_mock)
+
+        return mgr, mock_fetcher, yf_mock
+
+    def test_crypto_routes_to_ccxt_not_astock(self):
+        """BTC-USD must be routed to CCXTCryptoFetcher via the crypto fast path."""
+        expected_quote = UnifiedRealtimeQuote(
+            code="BTC-USD", name="Bitcoin", price=70000.0,
+            change_amount=1000.0, change_pct=1.44,
+            volume=12345678, amount=12345678.0,
+            high=70500.0, low=68900.0, open_price=69000.0,
+            pre_close=69000.0, source=RealtimeSource.CCXT,
+        )
+        mgr, ccxt_mock, yf_mock = self._build_manager_with_mock_ccxt(expected_quote)
+
+        result = mgr.get_realtime_quote("BTC-USD")
+
+        self.assertIsNotNone(result, "crypto quote must not be None")
+        self.assertEqual(result.source, RealtimeSource.CCXT)
+        self.assertEqual(result.code, "BTC-USD")
+        ccxt_mock.get_realtime_quote.assert_called_once()
+        yf_mock.get_realtime_quote.assert_not_called()
+
+    def test_crypto_falls_back_to_yfinance_when_ccxt_fails(self):
+        """When CCXT returns None, manager should try YfinanceFetcher."""
+        yf_quote = UnifiedRealtimeQuote(
+            code="ETH-USD", name="Ethereum", price=3500.0,
+            change_amount=50.0, change_pct=1.4,
+            volume=999999, amount=999999.0,
+            high=3550.0, low=3450.0, open_price=3450.0,
+            pre_close=3450.0, source=RealtimeSource.FALLBACK,
+        )
+        mgr, ccxt_mock, yf_mock = self._build_manager_with_mock_ccxt(None)
+        yf_mock.get_realtime_quote = MagicMock(return_value=yf_quote)
+
+        result = mgr.get_realtime_quote("ETH-USD")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.source, RealtimeSource.FALLBACK)
+        ccxt_mock.get_realtime_quote.assert_called_once()
+        yf_mock.get_realtime_quote.assert_called_once()
+
+    def test_crypto_returns_none_when_all_sources_fail(self):
+        """When both CCXT and YFinance fail, return None (not crash)."""
+        mgr, ccxt_mock, yf_mock = self._build_manager_with_mock_ccxt(None)
+        yf_mock.get_realtime_quote = MagicMock(return_value=None)
+
+        result = mgr.get_realtime_quote("SOL-USD")
+
+        self.assertIsNone(result)
+
+    def test_us_stock_does_not_hit_crypto_path(self):
+        """AAPL must NOT be routed through the crypto fast path."""
+        mgr, ccxt_mock, yf_mock = self._build_manager_with_mock_ccxt(None)
+        us_quote = UnifiedRealtimeQuote(
+            code="AAPL", name="Apple", price=180.0,
+            change_amount=2.0, change_pct=1.1,
+            volume=50000000, amount=50000000.0,
+            high=181.0, low=178.0, open_price=178.5,
+            pre_close=178.0, source=RealtimeSource.FALLBACK,
+        )
+        yf_mock.get_realtime_quote = MagicMock(return_value=us_quote)
+
+        result = mgr.get_realtime_quote("AAPL")
+
+        # AAPL should go through the US path, not crypto
+        ccxt_mock.get_realtime_quote.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

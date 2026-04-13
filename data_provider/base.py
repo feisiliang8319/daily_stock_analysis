@@ -1186,7 +1186,7 @@ class DataFetcherManager:
         stock_code = normalize_stock_code(stock_code)
 
         from .akshare_fetcher import _is_us_code
-        from .us_index_mapping import is_us_index_code
+        from .us_index_mapping import is_us_index_code, is_crypto_code
         from src.config import get_config
 
         config = get_config()
@@ -1194,6 +1194,23 @@ class DataFetcherManager:
         # 如果实时行情功能被禁用，直接返回 None
         if not config.enable_realtime_quote:
             logger.debug(f"[实时行情] 功能已禁用，跳过 {stock_code}")
+            return None
+
+        # ----------------------------------------------------------
+        # crypto — CCXT 首选, YFinance 兜底
+        # ----------------------------------------------------------
+        if is_crypto_code(stock_code):
+            primary_quote = self._try_fetcher_quote(stock_code, "CCXTCryptoFetcher")
+            if primary_quote is not None:
+                logger.info(f"[实时行情] crypto {stock_code} 成功获取 (来源: CCXTCryptoFetcher)")
+                return primary_quote
+            # CCXT 失败时降级到 YFinance
+            fallback_quote = self._try_fetcher_quote(stock_code, "YfinanceFetcher")
+            if fallback_quote is not None:
+                logger.info(f"[实时行情] crypto {stock_code} 成功获取 (来源: YfinanceFetcher, CCXT 降级)")
+                return fallback_quote
+            if log_final_failure:
+                logger.info(f"[实时行情] crypto {stock_code} 无可用数据源")
             return None
 
         # ----------------------------------------------------------
